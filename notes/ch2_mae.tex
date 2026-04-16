@@ -1,0 +1,275 @@
+% =============================================================================
+% CHAPTER 2: MASKED AUTOENCODERS (MAE) — EXPANDED
+% Paper: "Masked Autoencoders Are Scalable Self-Supervised Learners" (He et al., CVPR 2022)
+% =============================================================================
+\section{Masked Autoencoders (MAE)}\index{MAE}\index{Masked Autoencoder}
+
+\subsection{Motivation \& Core Philosophy}
+\textbf{The Data Problem:} ViT needs huge \emph{labeled} datasets. Labels are expensive ($\sim$\$0.05--0.50 per image for ImageNet-quality annotation). But \emph{unlabeled} images are virtually unlimited (internet, cameras, satellites).
+
+\textbf{Self-supervised learning (SSL):} Learn useful representations from unlabeled data by designing a \textbf{pretext task} — an artificial task whose labels come from the data itself.
+
+\textbf{NLP inspiration:} BERT masks 15\% of input tokens and predicts them. This simple pretext task produces state-of-the-art representations. \textbf{Why didn't this work for vision until 2022?}
+
+\textbf{Three reasons vision masking is harder than text masking:}
+\begin{enumerate}
+\item \textbf{Information density}: Words are \textbf{semantic tokens} — each carries meaning. Pixels are \textbf{spatially redundant} — each pixel is highly correlated with neighbors. Masking 15\% of pixels is trivially solvable via interpolation without learning any semantics.
+\item \textbf{No semantic vocabulary}: Text has discrete tokens from a dictionary. Images have continuous pixel values with no discrete ``meaning'' dictionary. What should the model predict?
+\item \textbf{Architecture mismatch}: BERT feeds mask tokens to the encoder. For vision, processing mask tokens through the large encoder is computationally wasteful.
+\end{enumerate}
+
+\begin{definition}[MAE]
+An asymmetric encoder-decoder architecture that masks a \textbf{high proportion} (75\%) of image patches, encodes \textbf{only the visible} patches, and reconstructs the \textbf{original pixels} of masked patches.
+\end{definition}
+
+\subsection{Architecture — Complete Detail}\index{MAE!Architecture}
+
+\subsubsection{Step 1: Patch Extraction \& Random Masking}\index{MAE!Masking}
+\begin{enumerate}
+\item Divide image into $N$ non-overlapping patches (same as ViT).
+\item Generate a random permutation of $\{1, \ldots, N\}$.
+\item Keep the first $\lfloor(1-r) \cdot N\rfloor$ patches (visible set $\mathcal{V}$). Discard the rest (masked set $\mathcal{M}$).
+\item Default masking ratio: $r = 0.75$ (75\% masked, 25\% visible).
+\end{enumerate}
+
+\textbf{Why uniform random masking?}
+\begin{itemize}
+\item \textbf{Block masking} (masking a contiguous region): Too easy — model can extrapolate edges, textures from surrounding.
+\item \textbf{Grid masking} (regular pattern): Predictable, model can exploit pattern.
+\item \textbf{Random masking}: Maximally unpredictable. No spatial bias. Forces holistic understanding.
+\item Ablation: Random masking beats block by 1.5\% and grid by 1.8\%.
+\end{itemize}
+
+\subsubsection{Step 2: Visible Patch Encoding}\index{MAE!Encoder}
+\textbf{Only visible patches} (plus their position embeddings) go through the ViT encoder:
+$$\mathbf{h}_\mathcal{V} = \text{ViT-Encoder}\!\left(\{\bx_p^i \mathbf{E} + \mathbf{e}_{pos}^i \mid i \in \mathcal{V}\}\right)$$
+
+\begin{keybox}[Critical Design Decision: No Mask Tokens in Encoder]
+\textbf{BERT approach}: Feed all tokens (visible + [MASK]) to encoder. Encoder size: $N$ tokens.\\
+\textbf{MAE approach}: Feed \textbf{only visible} tokens to encoder. Encoder size: $|\mathcal{V}| = 0.25N$ tokens.
+
+\textbf{Benefits}:
+\begin{enumerate}
+\item \textbf{Compute}: Self-attention is $O(N^2)$. Processing $0.25N$ tokens: $(0.25N)^2 = 0.0625N^2$ — \textbf{16$\times$ less attention compute}. Total speedup $\sim$3.5$\times$ (including MLP).
+\item \textbf{Memory}: 4$\times$ fewer tokens $\Rightarrow$ 4$\times$ less memory for activations.
+\item \textbf{No pre-train/fine-tune gap}: Mask tokens exist only during pre-training. If the encoder processes them, it sees a distribution during pre-training ([MASK] tokens) that doesn't exist during fine-tuning $\Rightarrow$ mismatch. MAE's encoder never sees mask tokens $\Rightarrow$ no gap.
+\end{enumerate}
+
+\textbf{Ablation}: Adding mask tokens to encoder: -0.6\% accuracy, 3.7$\times$ slower.
+\end{keybox}
+
+\subsubsection{Step 3: Decoder (Lightweight)}\index{MAE!Decoder}
+\begin{enumerate}
+\item Take encoded visible tokens $\mathbf{h}_\mathcal{V}$.
+\item Insert \textbf{shared learnable mask token} $\mathbf{m} \in \R^{D_{dec}}$ at each masked position.
+\item Add \textbf{full set of positional embeddings} to all tokens (so the decoder knows \textit{where} each token goes).
+\item Process through decoder Transformer: 8 blocks, width $D_{dec} = 512$.
+\item Linear projection to predict pixel values: $\R^{D_{dec}} \to \R^{P^2 \times C}$.
+\end{enumerate}
+
+$$\hat{\bx} = \text{Decoder}\!\left([\underbrace{\mathbf{h}_{vis}}_{\text{from encoder}};\; \underbrace{\mathbf{m}, \ldots, \mathbf{m}}_{\text{at masked positions}}] + \mathbf{e}_{pos}^{full}\right)$$
+
+\begin{keybox}[Why Asymmetric (Small Decoder)?]
+\textbf{3 reasons the decoder is deliberately weak:}
+\begin{enumerate}
+\item \textbf{Discarded after pre-training}: Only the encoder is used downstream. Decoder params are ``wasted.'' Keep it small to minimize waste.
+\item \textbf{Forces encoder to do the hard work}: If the decoder were powerful, it could reconstruct from minimal encoder features (``crutch effect''). A weak decoder forces the encoder to extract \textbf{rich, semantic representations} that make reconstruction easy.
+\item \textbf{Pixel reconstruction is low-level}: The decoder only needs to render pixels from high-level features. This doesn't require deep reasoning — a shallow network suffices. The encoder handles \textbf{semantic understanding} (shapes, objects, scenes).
+\end{enumerate}
+
+\textbf{Ablation (decoder depth)}:
+\begin{center}\small
+\begin{tabular}{lcc}\toprule
+Decoder Depth & Linear Probe & Fine-tune \\\midrule
+1 block & 72.5\% & 83.5\% \\
+4 blocks & 74.0\% & 84.0\% \\
+8 blocks (default) & 75.8\% & 84.0\% \\
+12 blocks & 75.6\% & 83.9\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+Linear probe (encoder quality) peaks at 8 blocks. Going deeper doesn't help. Fine-tune accuracy is virtually constant $\Rightarrow$ encoder features are robust.
+\end{keybox}
+
+\subsubsection{Step 4: Reconstruction Loss}\index{MAE!Loss}
+\begin{equation}\label{eq:mae_loss}
+\boxed{\mathcal{L} = \frac{1}{|\mathcal{M}|}\sum_{i \in \mathcal{M}} \norm{\hat{\bx}_p^i - \bx_p^i}^2}
+\end{equation}
+
+\begin{keybox}[Loss Formula — Every Detail]
+\begin{itemize}
+\item $\hat{\bx}_p^i \in \R^{P^2 C}$: Decoder's predicted pixel values for masked patch $i$.
+\item $\bx_p^i$: Ground-truth pixel values.
+\item $\mathcal{M}$: Set of masked patch indices. $|\mathcal{M}| = 0.75N$.
+\item \textbf{Loss only on masked patches}: Computing loss on visible patches would be trivial (the encoder has direct access to them). Only masked patches require the model to \emph{infer} missing content.
+\item \textbf{Per-patch normalization}: Optionally normalize each target patch to zero mean and unit variance: $\bx_p^i \leftarrow (\bx_p^i - \mu_i)/\sigma_i$. This improves quality because it forces the model to predict relative pixel variations within patches rather than absolute brightness, which varies with lighting.
+\item \textbf{MSE vs other losses}: MAE uses MSE. Alternatives: (a) Per-pixel cross-entropy (BEiT uses dVAE tokens). (b) Perceptual loss (SSIM, LPIPS). MSE is simplest and works well because the goal isn't photo-realism but representation learning.
+\end{itemize}
+\end{keybox}
+
+\subsection{Why 75\% Masking (Deep Analysis)}\index{MAE!Masking Ratio}
+
+\begin{center}\small
+\begin{tabular}{lccc}\toprule
+\textbf{Mask Ratio} & \textbf{Linear} & \textbf{Fine-tune} & \textbf{Analysis} \\\midrule
+25\% & 68.2\% & 82.5\% & Too easy: interpolation suffices \\
+50\% & 72.8\% & 83.4\% & Moderate: some reasoning needed \\
+\textbf{75\% (optimal)} & \textbf{75.8\%} & \textbf{84.0\%} & Hard: must understand semantics \\
+85\% & 74.5\% & 83.6\% & Very hard: insufficient context \\
+90\% & 72.3\% & 82.8\% & Extremely hard: near-guessing \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Optimal ratio analysis:}
+\begin{itemize}
+\item \textbf{Low ratio} ($<$50\%): Adjacent patches visible $\Rightarrow$ simple spatial interpolation works $\Rightarrow$ model learns textures, not semantics.
+\item \textbf{High ratio} (75\%): On average, each visible patch has $\sim$0 visible immediate neighbors. Must understand \textbf{global structure} (object shapes, scene layout) to reconstruct.
+\item \textbf{Too high} ($>$85\%): Insufficient information for meaningful reconstruction. Task becomes ambiguous (many valid reconstructions) $\Rightarrow$ noisy supervision signal.
+\end{itemize}
+
+\textbf{Comparison with BERT's 15\%:}
+A sentence like ``The [MASK] sat on the [MASK]'' is already non-trivial because each word carries unique semantic information. An image with 15\% masked patches is trivially solvable because adjacent patches are near-identical. This fundamental difference in \textbf{information density} explains the 5$\times$ higher masking ratio.
+
+\subsection{Pre-training Protocol}\index{MAE!Pre-training}
+\begin{itemize}
+\item \textbf{Dataset}: ImageNet-1k (1.28M images). No labels used.
+\item \textbf{Epochs}: 1600 (long!) — but each epoch is fast due to 25\% token processing.
+\item \textbf{Total cost}: $\sim$31 hours on 128 TPUs for ViT-Huge. Comparable to supervised training despite 4$\times$ more epochs (3.5$\times$ speedup per epoch compensates).
+\item \textbf{Optimizer}: AdamW ($\beta_1{=}0.9, \beta_2{=}0.95$). $\text{LR} = 1.5 \times 10^{-4} \times \text{batch}/256$. Cosine decay to 0. Warmup: 40 epochs.
+\item \textbf{Augmentations}: \textbf{Only random resized crop + horizontal flip}. No color jitter, no mixup, no cutmix. The masking itself is the augmentation!
+\item \textbf{Batch size}: 4096.
+\end{itemize}
+
+\subsection{Fine-tuning \& Evaluation}\index{MAE!Fine-tuning}
+
+\textbf{After pre-training}: Discard decoder. Keep encoder.
+
+\textbf{Linear probing} (freeze encoder, train linear classifier):
+\begin{itemize}
+\item Tests representation quality \emph{without} adaptation.
+\item ViT-Huge MAE: 75.8\% (vs SimCLR 71.7\%, DINO 78.2\%).
+\item MAE's linear probe is lower than DINO because MAE learns low-level features optimized for reconstruction. Fine-tuning bridges the gap.
+\end{itemize}
+
+\textbf{End-to-end fine-tuning}:
+\begin{itemize}
+\item Unfreeze encoder, add classification head, train on labeled data.
+\item ViT-Huge MAE: \textbf{87.8\%} top-1 on ImageNet (state-of-the-art with only ImageNet-1k data).
+\item ViT-Large MAE: 85.9\% (vs 82.6\% supervised ViT-Large).
+\end{itemize}
+
+\textbf{Transfer to downstream tasks}:
+\begin{itemize}
+\item COCO object detection: 53.3 box AP with ViT-Huge (outperforms supervised pre-training by 2.4 AP).
+\item ADE20K segmentation: 56.8 mIoU.
+\item \textbf{Key insight}: MAE is especially strong for \textbf{dense prediction} (detection, segmentation) because patch tokens learn spatially-aware features during reconstruction.
+\end{itemize}
+
+\subsection{MAE as a Generative Model}\index{MAE!Generative}
+MAE is a \textbf{conditional generative model}: $p(\text{masked patches} | \text{visible patches})$.
+
+\textbf{Generative applications:}
+\begin{itemize}
+\item \textbf{Image inpainting}: Mask a specific region, let MAE reconstruct. Results are plausible but not photorealistic (MSE loss $\Rightarrow$ averages modes $\Rightarrow$ blurry).
+\item \textbf{Image completion}: Given partial image, generate the rest. The 75\% masking during training makes it robust to large missing regions.
+\item \textbf{Multi-frame video prediction}: Mask future frames, predict from past frames.
+\item \textbf{Cross-modal generation}: Mask one modality (e.g., text), reconstruct from another (e.g., image). Used in multi-modal MAEs.
+\end{itemize}
+
+\textbf{Limitation as generator}: MAE uses MSE loss, which produces the \emph{expected} reconstruction (mean of possible completions), resulting in blurry outputs for ambiguous regions. For sharp generation, combine MAE representations with diffusion models.
+
+\subsection{MAE vs Other Self-Supervised Methods}\index{MAE!Comparison}
+
+\begin{center}\small
+\begin{tabular}{lcccc}\toprule
+& \textbf{MAE} & \textbf{DINO} & \textbf{MoCo v3} & \textbf{BEiT} \\\midrule
+Type & Reconstruction & Distillation & Contrastive & Reconstruction \\
+Target & Raw pixels & Teacher features & Same image views & dVAE tokens \\
+Masking & 75\% patches & Random crops & Random crops & 40\% patches \\
+Negatives & No & No & Yes (queue) & No \\
+Augmentations & Minimal & Heavy (multi-crop) & Heavy & Moderate \\
+Compute/epoch & \textbf{Low (25\% tokens)} & Medium & High & Medium \\
+Linear probe & 75.8\% & \textbf{78.2\%} & 76.7\% & 56.7\% \\
+Fine-tune & \textbf{87.8\%} & 83.6\% & 84.1\% & 83.2\% \\
+Best for & Large ViTs & Medium ViTs & ResNet+ViT & ViT pre-train \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Why MAE's linear probe is lower but fine-tune is higher:} MAE learns features optimized for pixel reconstruction (includes low-level details). These features need adaptation for classification. After fine-tuning, the rich representations outperform contrastive methods that learn more ``classification-ready'' but less complete features.
+
+\subsection{What MAE Actually Changes (Exam-Critical)}\index{MAE!What it Changes}
+
+\textbf{From the Mid-1 exam:} ``A team leader claims MAE succeeds because masking reduces model capacity.'' This is \textbf{WRONG}.
+
+\textbf{What MAE does NOT change:}
+\begin{itemize}
+\item Model architecture (same ViT encoder)
+\item Parameter count (identical)
+\item Model capacity (identical)
+\end{itemize}
+
+\textbf{What MAE actually changes:}
+\begin{itemize}
+\item \textbf{Training signal}: Reconstruction of masked patches creates a semantically meaningful self-supervised objective.
+\item \textbf{Representation structure}: Forces each patch token to encode globally consistent information (not just local texture).
+\item \textbf{Weight initialization}: Places model in a favorable region of parameter space for downstream tasks (good initialization $\Rightarrow$ better fine-tuning).
+\item \textbf{Effective task difficulty}: 75\% masking makes reconstruction non-trivial, requiring understanding of object structure, part relationships, and scene semantics.
+\end{itemize}
+
+\subsection{CLS Token Behavior in MAE}\index{MAE!CLS Token}
+
+\textbf{Supervised ViT}: CLS token is the primary aggregator. Information concentrates in CLS. Removing CLS $\Rightarrow$ large performance drop.
+
+\textbf{MAE-pretrained ViT}: Each patch token must be informationally rich (for reconstruction). Information is \textbf{distributed} across all patch tokens. CLS vs GAP gap is minimal.
+
+\textbf{Why?} MAE's objective forces each visible patch to encode enough context to reconstruct its masked neighbors — functioning both as a ``query'' (what's here) and ``context'' (what's nearby). This creates self-sufficient patch representations.
+
+\subsection{When to Use / When NOT}\index{MAE!When to Use}
+\begin{center}\small
+\begin{tabular}{p{0.45\linewidth}p{0.45\linewidth}}\toprule
+\textbf{Use MAE When} & \textbf{Avoid MAE When} \\\midrule
+You have large \textbf{unlabeled} datasets & Abundant labeled data available \\
+Pre-training ViTs (especially large ones) & Working with CNNs (masking doesn't work well) \\
+Dense prediction tasks (detection, segmentation) & Need multi-modal alignment (use CLIP) \\
+Limited compute (efficient encoder) & Need photorealistic generation (use diffusion) \\
+Want minimal augmentation dependency & Need strong linear probe right away (use DINO) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Limitations \& Solutions}\index{MAE!Limitations}
+\begin{enumerate}
+\item \textbf{ViT-specific}: Patch masking requires patch-based architecture. $\Rightarrow$ \textit{Solutions}: SparK (for hierarchical models), ConvMAE (hybrid).
+\item \textbf{Pixel-level loss}: May bias toward low-level features. $\Rightarrow$ \textit{Solutions}: BEiT (predict dVAE tokens), MaskFeat (predict HOG features), data2vec (predict latent representations).
+\item \textbf{Long pre-training}: 1600 epochs. $\Rightarrow$ Per-epoch cost is low (3.5$\times$ faster). Total wall time is comparable to supervised training.
+\item \textbf{Weak linear probe}: Features need fine-tuning for classification. $\Rightarrow$ For linear-probe-critical applications, use DINO or combine MAE with contrastive learning.
+\item \textbf{No invariance learning}: MAE doesn't learn augmentation invariances. $\Rightarrow$ Combine with contrastive head during pre-training (SiameseMAE).
+\end{enumerate}
+
+\subsection{Exam Questions — MAE (Expanded)}\index{MAE!Exam Questions}
+
+\begin{examq}[Q1: Mathematical — Compute Analysis]
+An MAE uses ViT-Large encoder ($D{=}1024$, 24 layers) and decoder ($D_{dec}{=}512$, 8 layers). Input: $224 \times 224$, $P{=}16$, ratio 75\%. Compute: (a) total patches, (b) visible patches, (c) encoder sequence length, (d) decoder sequence length, (e) FLOPs savings in encoder attention, (f) memory savings.
+
+\textbf{Answer:} (a) $N = 224^2/16^2 = 196$. (b) Visible: $0.25 \times 196 = 49$. (c) Encoder: 49 + 1 [CLS] = 50. (d) Decoder: all 196 + 1 = 197. (e) Attention FLOPs: full $\propto (197)^2 = 38,809$. MAE encoder $\propto (50)^2 = 2,500$. Savings: $38,809/2,500 = 15.5\times$. (f) Memory for attention maps: full = $197 \times 197 \times 2\text{B} \times 16\text{heads} = 9.9$MB/layer. MAE encoder = $50 \times 50 \times 2 \times 16 = 0.16$MB/layer. Savings: $\sim$$62\times$ per layer.
+\end{examq}
+
+\begin{examq}[Q2: Scenario — Satellite Imagery (Mid-Exam Style)]
+\textbf{You're given 20M unlabeled satellite images and 5K labeled ones. You train MAE with 75\% masking. After pre-training, reconstruction error is near-zero on training images. A colleague says this means the model has overfit. Is this correct?}
+
+\textbf{Answer:} \textbf{No.} Near-zero reconstruction error on training images does \textbf{not} imply overfitting in this setting. Two key reasons: (1) \textbf{Overparameterization + second descent}: Modern overparameterized neural networks can perfectly fit training data while still generalizing well. The model is in the ``interpolation regime'' where increased capacity reduces test error (double descent phenomenon). (2) \textbf{MAE pre-training constrains the solution space}: The reconstruction objective forces the model into a favorable region of parameter space where representations are semantically meaningful. This is not memorization — the model learns general concepts (roads, buildings, water) that enable reconstruction of \emph{any} satellite image, not just training ones. To verify: check reconstruction quality on \textbf{held-out} images. If quality is similar, no overfitting occurred.
+\end{examq}
+
+\begin{examq}[Q3: Design — Method Comparison]
+\textbf{For pre-training a ViT-Huge on 50M medical X-ray images, compare MAE vs SimCLR vs supervised pre-training on ImageNet. Which do you recommend and why?}
+
+\textbf{Answer:} \textbf{Recommend MAE.} (1) \textbf{vs SimCLR}: SimCLR needs big batches ($\geq$4096) for enough negatives. For 50M images, batch size = 32K would need $\sim$128 GPUs just for SimCLR's memory. MAE needs only 25\% of tokens $\Rightarrow$ much more memory-efficient. Also, SimCLR's augmentations (color jitter, crop) may not be appropriate for medical images where color and exact position matter. MAE uses only crop + flip. (2) \textbf{vs ImageNet supervised}: Domain gap. ImageNet features (dogs, cars) transfer poorly to X-rays. MAE on domain-specific data learns anatomical structures directly. (3) \textbf{Why MAE}: Efficient (75\% masking = fast), minimal augmentation (safe for medical domain), 50M images is sufficient for MAE (shown to scale well), and dense features are ideal for downstream segmentation of pathology regions.
+\end{examq}
+
+\begin{examq}[Q4: Theoretical — Why Masking Works]
+\textbf{Explain the information-theoretic interpretation of why MAE's masking creates useful representations.}
+
+\textbf{Answer:} From an information theory perspective, MAE forces the encoder to learn a \textbf{compressed representation} $\mathbf{h}$ of visible patches that maximizes $I(\mathbf{h}; \bx_{\mathcal{M}} | \bx_{\mathcal{V}})$ — the mutual information between encoded features and masked patches, given visible patches. Since visible patches alone can predict masked patches via low-level interpolation, the encoder must capture \textbf{higher-order structure} (objects, spatial relationships, semantic content) to outperform interpolation. This high-order information is exactly what makes representations useful for downstream tasks. The 75\% masking ratio maximizes the ``information gap'' between simple interpolation and semantic understanding, forcing the model into the regime where learning semantics is necessary for good reconstruction.
+\end{examq}

@@ -1,0 +1,337 @@
+% =============================================================================
+% CHAPTER 3: GANs, CycleGAN, Pix2Pix — EXPANDED
+% =============================================================================
+\section{Generative Adversarial Networks}\index{GAN}
+
+\subsection{GAN Fundamentals (Goodfellow et al., 2014)}\index{GAN!Original}
+
+\begin{definition}[GAN]
+A framework for training a generative model $G$ via an adversarial process: a \textbf{generator} $G$ maps random noise to data space, and a \textbf{discriminator} $D$ classifies inputs as real or fake. They play a two-player \textbf{minimax game}.
+\end{definition}
+
+\textbf{Components:}
+\begin{itemize}
+\item \textbf{Generator} $G: \R^{d_z} \to \R^{d_x}$: Maps random noise $\bz \sim p_z(\bz) = \mathcal{N}(\mathbf{0}, \mathbf{I})$ to data space. Defines an implicit distribution $p_g(\bx)$.
+\item \textbf{Discriminator} $D: \R^{d_x} \to [0,1]$: Outputs probability that input is real. Binary classifier.
+\end{itemize}
+
+\subsubsection{GAN Objective — Complete Derivation}\index{GAN!Loss}
+\begin{equation}\label{eq:gan_loss}
+\boxed{\min_G \max_D \; V(D,G) = \E_{\bx \sim p_{data}}[\log D(\bx)] + \E_{\bz \sim p_z}[\log(1 - D(G(\bz)))]}
+\end{equation}
+
+\begin{keybox}[GAN Objective — Term-by-Term Analysis]
+\textbf{Term 1: $\E_{\bx \sim p_{data}}[\log D(\bx)]$}
+\begin{itemize}
+\item $D$ sees a \textbf{real} sample $\bx$.
+\item $D$ wants $D(\bx) \to 1$ (correctly identify as real).
+\item $\log D(\bx) \to \log(1) = 0$ (best case, maximum).
+\item $\log D(\bx) \to \log(0) = -\infty$ (worst case).
+\item $D$ maximizes this term. $G$ has no influence.
+\end{itemize}
+
+\textbf{Term 2: $\E_{\bz \sim p_z}[\log(1 - D(G(\bz)))]$}
+\begin{itemize}
+\item $G$ generates fake sample $G(\bz)$. $D$ evaluates it.
+\item \textbf{$D$'s perspective}: Wants $D(G(\bz)) \to 0$ (detect fake). Then $\log(1-0) = 0$ (best).
+\item \textbf{$G$'s perspective}: Wants $D(G(\bz)) \to 1$ (fool $D$). Then $\log(1-1) = -\infty$ (minimized).
+\item $D$ maximizes, $G$ minimizes this term.
+\end{itemize}
+
+\textbf{The minimax game:}
+$D$ tries to maximize $V$ (become a perfect detector). $G$ tries to minimize $V$ (become a perfect forger). At equilibrium: $G$ produces data indistinguishable from real, $D$ outputs $1/2$ for everything.
+\end{keybox}
+
+\subsubsection{Optimal Discriminator — Full Proof}\index{GAN!Optimal Discriminator}
+\begin{theorem}[Optimal Discriminator]
+For any fixed generator $G$, the optimal discriminator is:
+\begin{equation}
+\boxed{D^*_G(\bx) = \frac{p_{data}(\bx)}{p_{data}(\bx) + p_g(\bx)}}
+\end{equation}
+\end{theorem}
+
+\textbf{Proof:}
+$$V(D,G) = \int_\bx p_{data}(\bx)\log D(\bx) + p_g(\bx)\log(1-D(\bx))\,d\bx$$
+For each $\bx$, maximize the integrand $f(y) = a\log y + b\log(1-y)$ where $a = p_{data}(\bx)$, $b = p_g(\bx)$, $y = D(\bx)$:
+$$f'(y) = \frac{a}{y} - \frac{b}{1-y} = 0 \implies y^* = \frac{a}{a+b} = \frac{p_{data}(\bx)}{p_{data}(\bx)+p_g(\bx)}$$
+$f''(y^*) = -\frac{a}{y^2}-\frac{b}{(1-y)^2} < 0$ confirms maximum. \qed
+
+\textbf{At equilibrium}: If $p_g = p_{data}$, then $D^*(\bx) = \frac{1}{2}$ everywhere. The discriminator is maximally confused.
+
+\subsubsection{GAN Objective as Jensen-Shannon Divergence}\index{JSD}\index{GAN!JSD}
+Substituting $D^*_G$ into $V(G, D^*_G)$:
+\begin{align}
+V(G, D^*_G) &= \E_{p_{data}}\left[\log\frac{p_{data}}{p_{data}+p_g}\right] + \E_{p_g}\left[\log\frac{p_g}{p_{data}+p_g}\right] \nonumber\\
+&= \E_{p_{data}}\left[\log\frac{p_{data}}{\frac{p_{data}+p_g}{2}}\right] + \E_{p_g}\left[\log\frac{p_g}{\frac{p_{data}+p_g}{2}}\right] - 2\log 2 \nonumber\\
+&= \KL(p_{data}\|\tfrac{p_{data}+p_g}{2}) + \KL(p_g\|\tfrac{p_{data}+p_g}{2}) - \log 4 \nonumber\\
+&= 2\cdot\text{JSD}(p_{data}\|p_g) - \log 4 \label{eq:gan_jsd}
+\end{align}
+
+\textbf{Jensen-Shannon Divergence}: $\text{JSD}(P\|Q) = \frac{1}{2}\KL(P\|M) + \frac{1}{2}\KL(Q\|M)$ where $M = \frac{P+Q}{2}$.
+\begin{itemize}
+\item $\text{JSD} \geq 0$, with equality iff $P = Q$.
+\item $\text{JSD} \leq \log 2$.
+\item Symmetric (unlike KL).
+\item At minimum: $\min_G V(G, D^*_G) = -\log 4$ when $p_g = p_{data}$.
+\end{itemize}
+
+\subsubsection{GAN Training Algorithm}\index{GAN!Training}
+\begin{algorithm}[H]
+\caption{GAN Training (per iteration)}
+\small
+\begin{algorithmic}[1]
+\For{$k$ steps}  \Comment{Train $D$ more (default $k{=}1$)}
+    \State Sample $\{\bz^{(i)}\}_{i=1}^m \sim p_z$, $\{\bx^{(i)}\}_{i=1}^m \sim p_{data}$
+    \State Update $D$: $\theta_d \leftarrow \theta_d + \eta\nabla_{\theta_d}\frac{1}{m}\sum[\log D(\bx^{(i)}) + \log(1-D(G(\bz^{(i)})))]$
+\EndFor
+\State Sample $\{\bz^{(i)}\}_{i=1}^m \sim p_z$
+\State Update $G$: $\theta_g \leftarrow \theta_g - \eta\nabla_{\theta_g}\frac{1}{m}\sum\log(1-D(G(\bz^{(i)})))$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Practical: Non-Saturating Loss}\index{GAN!Non-saturating}\\
+The original $G$ loss $-\log(1-D(G(\bz)))$ has vanishing gradients when $D$ is confident (early training). \textbf{Fix}: Maximize $\log D(G(\bz))$ instead. Same fixed point, stronger gradient:
+$$\nabla_\theta \log(D(G(\bz))) \gg \nabla_\theta -\log(1-D(G(\bz))) \quad \text{when } D(G(\bz)) \approx 0$$
+
+\subsection{GAN Training Challenges \& Solutions}\index{GAN!Challenges}
+
+\subsubsection{Mode Collapse}\index{Mode Collapse}
+\textbf{Problem}: $G$ maps all $\bz$ to a few examples that fool $D$, ignoring data diversity.
+
+\textbf{Example}: Training on MNIST, $G$ only produces ``1''s because this mode is easiest to generate realistically.
+
+\textbf{Solutions:}
+\begin{enumerate}
+\item \textbf{Minibatch discrimination}: $D$ sees the \emph{batch}, not individual samples. If all samples are similar, $D$ detects collapse.
+\item \textbf{Unrolled GAN}: $G$'s gradient accounts for $k$ future $D$ updates. $G$ can't exploit transient $D$ weaknesses.
+\item \textbf{WGAN}: Wasserstein distance provides gradients even for non-overlapping distributions.
+\item \textbf{Progressive growing}: Start with low-resolution, gradually increase. Each stage has simpler modes.
+\end{enumerate}
+
+\subsubsection{Wasserstein GAN (WGAN)}\index{WGAN}
+\textbf{Problem with JSD}: When $p_{data}$ and $p_g$ have non-overlapping supports (common in high dimensions), $\text{JSD} = \log 2$ everywhere $\Rightarrow$ constant gradient for $G$ $\Rightarrow$ can't learn.
+
+\textbf{WGAN objective}: Use \textbf{Earth Mover's Distance} (Wasserstein-1):
+\begin{equation}
+W(p_{data}, p_g) = \max_{\|D\|_L \leq 1} \E_{p_{data}}[D(\bx)] - \E_{p_g}[D(\bx)]
+\end{equation}
+
+\begin{keybox}[WGAN vs Standard GAN]
+\begin{itemize}
+\item \textbf{No log, no sigmoid}: $D$ (now called ``critic'') outputs unconstrained real values, not probabilities.
+\item \textbf{Lipschitz constraint}: $\|D\|_L \leq 1$ enforced by weight clipping (WGAN) or gradient penalty (WGAN-GP).
+\item \textbf{WGAN-GP gradient penalty}: $\lambda\E_{\hat{\bx}}[(\|\nabla_{\hat{\bx}}D(\hat{\bx})\|_2 - 1)^2]$ where $\hat{\bx}$ is interpolation between real and fake.
+\item \textbf{Benefits}: Continuous gradients everywhere $\Rightarrow$ no mode collapse, no vanishing gradients, training loss correlates with sample quality.
+\end{itemize}
+\end{keybox}
+
+\subsubsection{Spectral Normalization}\index{Spectral Normalization}
+Normalize each layer's weight matrix by its spectral norm (largest singular value):
+$$\bar{\mathbf{W}} = \mathbf{W}/\sigma(\mathbf{W})$$
+This ensures the discriminator is 1-Lipschitz automatically, without gradient penalty. Simpler, faster, and widely used in modern GANs.
+
+\subsection{GAN Evaluation Metrics}\index{GAN!Evaluation}\index{FID}\index{IS}
+
+\textbf{FID (Fr\'echet Inception Distance):}
+\begin{equation}
+\text{FID} = \|\bmu_r - \bmu_g\|^2 + \text{Tr}(\Sigma_r + \Sigma_g - 2(\Sigma_r\Sigma_g)^{1/2})
+\end{equation}
+Compares Inception v3 feature statistics of real vs generated. Lower is better. Gold standard metric.
+
+\textbf{IS (Inception Score):}
+\begin{equation}
+\text{IS} = \exp(\E_{\bx \sim p_g}[\KL(p(y|\bx) \| p(y))])
+\end{equation}
+Measures quality (sharp class predictions) and diversity ($p(y)$ should be uniform). Higher is better. Less reliable than FID.
+
+\subsection{Pix2Pix (Isola et al., 2017)}\index{Pix2Pix}
+
+\begin{definition}[Pix2Pix]
+A \textbf{paired} image-to-image translation framework using conditional GAN with U-Net generator and PatchGAN discriminator.
+\end{definition}
+
+\textbf{Setting}: Given \textbf{paired} training set $\{(\bx_i, \mathbf{y}_i)\}$, learn $G: \bx \to \mathbf{y}$.
+
+\subsubsection{Pix2Pix Objective — Full Analysis}\index{Pix2Pix!Loss}
+\begin{equation}\label{eq:pix2pix}
+\boxed{\mathcal{L} = \underbrace{\mathcal{L}_{cGAN}(G,D)}_{\text{realism}} + \underbrace{\lambda \norm{\mathbf{y} - G(\bx)}_1}_{\text{fidelity}}}
+\end{equation}
+where $\mathcal{L}_{cGAN} = \E[\log D(\bx, \mathbf{y})] + \E[\log(1-D(\bx, G(\bx)))]$.
+
+\begin{keybox}[Pix2Pix Loss — Every Component]
+\begin{itemize}
+\item \textbf{cGAN loss}: $D$ receives \textbf{both} input $\bx$ and output (real $\mathbf{y}$ or fake $G(\bx)$). This conditions $D$ on the input — it judges not just ``is this realistic'' but ``is this a realistic \emph{translation of this specific input}.''
+\item \textbf{L1 loss}: $\|\mathbf{y} - G(\bx)\|_1$ ensures structural similarity to ground truth.
+\item \textbf{Why L1 not L2?} L2 = $\|\mathbf{y}-G(\bx)\|^2$. L2 penalizes large errors quadratically $\Rightarrow$ model plays it safe, outputs the \emph{mean} of possible outputs $\Rightarrow$ \textbf{blurry}. L1 penalizes linearly $\Rightarrow$ median behavior $\Rightarrow$ \textbf{sharper}.
+\item \textbf{$\lambda = 100$}: Heavy emphasis on fidelity. Without L1 ($\lambda{=}0$): realistic textures but wrong structure. Without GAN ($\lambda{=}\infty$): correct structure but blurry textures.
+\item \textbf{L1 captures low frequencies}, GAN loss captures \textbf{high frequencies}. Together: both structure and texture are correct.
+\end{itemize}
+\end{keybox}
+
+\subsubsection{U-Net Generator for Pix2Pix}\index{Pix2Pix!U-Net}
+Encoder-decoder with skip connections:
+\begin{itemize}
+\item \textbf{Encoder}: 8 layers. Conv $\to$ BN $\to$ LeakyReLU. Channels: 64, 128, 256, 512, 512, 512, 512, 512.
+\item \textbf{Decoder}: 8 layers. Transposed Conv $\to$ BN $\to$ ReLU + Dropout (first 3 layers, 50\%).
+\item \textbf{Skip connections}: Concatenate encoder feature $i$ with decoder feature $n{-}i$. Critical for preserving spatial structure.
+\end{itemize}
+
+\textbf{Why not encoder-decoder without skips?} Without skips, all information must pass through the bottleneck. For image translation, input and output share low-level structure (edges, corners). Skips shuttle this directly, letting the bottleneck focus on high-level transformation. Ablation: without skips, PSNR drops by $\sim$3 dB.
+
+\subsubsection{PatchGAN Discriminator}\index{PatchGAN}
+Instead of classifying the entire image as real/fake, classify $N{\times}N$ patches:
+$$D(\bx, \mathbf{y}): \R^{2 \times H \times W} \to \R^{H/N \times W/N}$$
+Each output element classifies one $N{\times}N$ receptive field. Average all outputs for final loss.
+
+\textbf{Why PatchGAN?}
+\begin{enumerate}
+\item \textbf{Texture focus}: L1 already handles global structure. PatchGAN only needs to judge local texture/statistics $\Rightarrow$ high-frequency quality.
+\item \textbf{Fewer parameters}: $N{=}70$ PatchGAN has $\sim$2.8M params vs $\sim$11M for full-image $D$.
+\item \textbf{Arbitrary image size}: Fully convolutional — works on any resolution.
+\item \textbf{$N{=}70$ optimal}: $N{=}1$ (PixelGAN) = colorfulness but no texture. $N{=}286$ (full image) = less stable. $N{=}70$ = best balance.
+\end{enumerate}
+
+\subsection{CycleGAN (Zhu et al., 2017)}\index{CycleGAN}
+
+\begin{definition}[CycleGAN]
+\textbf{Unpaired} image-to-image translation using cycle consistency. Learns $G: X \to Y$ and $F: Y \to X$ simultaneously without paired examples.
+\end{definition}
+
+\subsubsection{Why Unpaired?}\index{CycleGAN!Motivation}
+Paired data is often \textbf{impossible to collect}:
+\begin{itemize}
+\item Horse $\leftrightarrow$ Zebra: Can't photograph the same animal in both forms.
+\item Monet painting $\leftrightarrow$ Photo: Monet is dead; can't take a photo of his exact scene.
+\item Summer $\to$ Winter: Can't photograph the same scene months apart with identical conditions.
+\end{itemize}
+
+\textbf{Problem with adversarial loss alone:} $\mathcal{L}_{GAN}(G, D_Y)$ only ensures $G(\bx)$ looks like domain $Y$. But $G$ could map \textbf{all} inputs to a single output in $Y$! No constraint preserves content.
+
+\subsubsection{Cycle Consistency Constraint}\index{CycleGAN!Cycle Consistency}
+\begin{equation}\label{eq:cyclegan}
+\boxed{\mathcal{L} = \mathcal{L}_{GAN}(G, D_Y) + \mathcal{L}_{GAN}(F, D_X) + \lambda \mathcal{L}_{cyc}(G, F)}
+\end{equation}
+\begin{equation}\label{eq:cycle_loss}
+\boxed{\mathcal{L}_{cyc} = \E_{\bx \sim X}[\|F(G(\bx)) - \bx\|_1] + \E_{\mathbf{y} \sim Y}[\|G(F(\mathbf{y})) - \mathbf{y}\|_1]}
+\end{equation}
+
+\begin{keybox}[Cycle Consistency — Deep Explanation]
+\textbf{Forward cycle}: Horse $\xrightarrow{G}$ Zebra $\xrightarrow{F}$ Horse (should recover original).\\
+\textbf{Backward cycle}: Zebra $\xrightarrow{F}$ Horse $\xrightarrow{G}$ Zebra (should recover original).
+
+\textbf{Why this constrains the mapping:}
+\begin{enumerate}
+\item Without cycle loss: $G$ can map all horses to a single ``generic zebra.'' $D_Y$ is happy (it's realistic).
+\item With cycle loss: $F$ must recover the \emph{original} horse from $G$'s output. If $G$ mapped two horses to the same zebra, $F$ can't recover both $\Rightarrow$ high cycle loss. So $G$ must preserve distinguishing information $\Rightarrow$ approximate bijectivity.
+\item \textbf{Mathematically}: Cycle consistency encourages $F \approx G^{-1}$, making the mapping approximately invertible and content-preserving.
+\end{enumerate}
+
+\textbf{Limitation}: Forces structure preservation $\Rightarrow$ CycleGAN mainly transfers \textbf{texture/style}, not \textbf{geometry}. Can't transform a horse's body shape to a zebra's different body shape.
+
+$\lambda = 10$ (default). Higher = more structural preservation. Lower = more creative but less faithful.
+\end{keybox}
+
+\textbf{Identity Loss} (optional but important for color preservation):\index{CycleGAN!Identity Loss}
+\begin{equation}
+\mathcal{L}_{id} = \E_{\mathbf{y}}[\|G(\mathbf{y})-\mathbf{y}\|_1] + \E_{\bx}[\|F(\bx)-\bx\|_1]
+\end{equation}
+If $\mathbf{y}$ is already in domain $Y$, $G$ should not change it. Critical for tasks where color must be preserved (photo $\to$ Monet: without identity loss, model may invert all colors).
+
+\subsubsection{CycleGAN Architecture}\index{CycleGAN!Architecture}
+\textbf{Generators}: ResNet with 9 residual blocks (for $256{\times}256$), 6 blocks (for $128{\times}128$). Structure: $c7s1$-$64, d128, d256, R256 \times 9, u128, u64, c7s1$-$3$.
+
+\textbf{Why ResNet not U-Net?} In unpaired translation, input and output are NOT spatially aligned. U-Net skip connections would copy misaligned features. ResNet learns transformations without spatial correspondence assumption.
+
+\textbf{Discriminators}: $70{\times}70$ PatchGAN (same as Pix2Pix).
+
+\textbf{Training tricks}:
+\begin{itemize}
+\item \textbf{Least-squares GAN loss} (LSGAN): Replace $\log$ with squared error. More stable gradients, fewer artifacts.
+\item \textbf{History buffer}: Keep pool of 50 previously generated images. $D$ sees old fakes $\Rightarrow$ reduces oscillation.
+\item \textbf{Learning rate}: 0.0002 with Adam ($\beta_1{=}0.5$). Constant for 100 epochs, linear decay to 0 for next 100 epochs.
+\end{itemize}
+
+\subsection{Pix2Pix vs CycleGAN — Complete Comparison}\index{CycleGAN!vs Pix2Pix}
+\begin{center}\small
+\begin{tabular}{lcc}\toprule
+& \textbf{Pix2Pix} & \textbf{CycleGAN} \\\midrule
+Data & \textbf{Paired} & \textbf{Unpaired} \\
+Generators & 1 (U-Net) & 2 (ResNet $G$, $F$) \\
+Discriminators & 1 ($D$) & 2 ($D_X$, $D_Y$) \\
+Key constraint & L1 reconstruction & Cycle consistency \\
+Quality & Higher (direct supervision) & Lower (indirect constraint) \\
+Applicability & Limited (need pairs) & \textbf{Broad} \\
+Geometric changes & Yes (supervised) & No (cycle forces structure preserve) \\
+Training cost & Lower (3 networks) & Higher (4 networks) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{StyleGAN \& Modern GAN Architectures}\index{StyleGAN}
+\textbf{StyleGAN} (Karras, 2019): State-of-the-art unconditional image generation.
+\begin{itemize}
+\item \textbf{Mapping network}: $\bz \to \mathbf{w}$ (8-layer MLP). Maps noise to ``style'' space $\mathcal{W}$. $\mathcal{W}$ is less entangled than $\mathcal{Z}$.
+\item \textbf{Style injection via AdaIN}: $\text{AdaIN}(\bx, \mathbf{w}) = y_s \cdot \frac{\bx - \mu(\bx)}{\sigma(\bx)} + y_b$ where $y_s, y_b$ come from $\mathbf{w}$.
+\item \textbf{Progressive growing}: Start $4{\times}4$, grow to $1024{\times}1024$.
+\item \textbf{Style mixing}: Use different $\mathbf{w}$ at different layers for control.
+\end{itemize}
+
+\subsection{When to Use Which GAN}\index{GAN!Scenario Selection}
+\begin{center}\small
+\begin{tabular}{p{0.55\linewidth}l}\toprule
+\textbf{Scenario} & \textbf{Use} \\\midrule
+Paired sketch $\to$ photo & Pix2Pix \\
+Photo $\to$ Monet style (no pairs) & CycleGAN \\
+Generate photorealistic faces from noise & StyleGAN2 \\
+Super-resolution & ESRGAN \\
+Multi-domain (smile/age/gender) with one model & StarGAN \\
+Class-conditional ImageNet generation & BigGAN \\
+Text-to-image (modern) & Diffusion (not GAN) \\
+Fastest generation (real-time) & GAN (distilled) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{GAN Limitations \& The Diffusion Shift}\index{GAN!Limitations}
+\begin{enumerate}
+\item \textbf{Training instability}: Minimax games are inherently hard to optimize. \textit{Solution}: WGAN-GP, SN-GAN, progressive training.
+\item \textbf{Mode collapse}: Generator ignores data diversity. \textit{Solution}: Minibatch discrimination, unrolled GANs, diversity regularization.
+\item \textbf{No density estimation}: Can't evaluate $p_g(\bx)$. \textit{Solution}: Use FID/IS metrics (indirect).
+\item \textbf{Hard text conditioning}: Complex text-to-image requires many modifications. \textit{Solution}: This is why diffusion models displaced GANs for text-to-image.
+\item \textbf{Truncation trade-off}: Truncating $\bz$ improves quality but reduces diversity (StyleGAN).
+\end{enumerate}
+
+\subsection{Exam Questions — GANs (Expanded)}\index{GAN!Exam Questions}
+
+\begin{examq}[Q1: Full Derivation]
+\textbf{Derive the optimal discriminator \& show that the GAN objective at optimality equals $2\text{JSD}(p_{data}\|p_g) - \log 4$.}
+
+\textbf{Answer:} Step 1: For fixed $G$, maximize $V$ w.r.t. $D$. The integrand $a\log y + b\log(1-y)$ is maximized at $y^* = a/(a+b)$ where $a{=}p_{data}$, $b{=}p_g$. So $D^*{=}p_{data}/(p_{data}{+}p_g)$. Step 2: Substitute into $V$:\\
+$V(G,D^*) = \E_{p_d}[\log\frac{p_d}{p_d+p_g}] + \E_{p_g}[\log\frac{p_g}{p_d+p_g}]$\\
+$= \E_{p_d}[\log\frac{2p_d}{p_d+p_g}] + \E_{p_g}[\log\frac{2p_g}{p_d+p_g}] - 2\log 2$\\
+$= \KL(p_d\|\frac{p_d+p_g}{2}) + \KL(p_g\|\frac{p_d+p_g}{2}) - \log 4 = 2\text{JSD} - \log 4$. \qed
+\end{examq}
+
+\begin{examq}[Q2: Scenario — Medical Imaging]
+\textbf{You want to translate MRI $\to$ CT for treatment planning. You have 500 paired MRI-CT scans and 10K unpaired MRIs. Design the best system.}
+
+\textbf{Answer:} \textbf{Hybrid approach}: (1) Train \textbf{Pix2Pix} on 500 paired images as supervised backbone. U-Net generator with L1 + adversarial loss. (2) Augment with \textbf{CycleGAN} semi-supervised: add cycle consistency loss on unpaired MRIs. Generator $G_{MRI\to CT}$ is shared between both losses. On paired data: use Pix2Pix loss (ground truth available). On unpaired data: use cycle loss (no ground truth, but consistency constraint). (3) \textbf{Use PatchGAN} discriminator ($70{\times}70$) for both. (4) \textbf{Critical}: Add perceptual loss using VGG features for anatomical structure preservation. (5) Validate with radiologist evaluation + structural similarity metrics (SSIM, PSNR).
+\end{examq}
+
+\begin{examq}[Q3: Why ResNet in CycleGAN?]
+\textbf{Explain architecturally why CycleGAN uses ResNet generator while Pix2Pix uses U-Net.}
+
+\textbf{Answer:} \textbf{U-Net} has skip connections that pass \textbf{spatially aligned features} from encoder to decoder. In Pix2Pix, input and output are \textbf{pixel-aligned} (same scene, different representation), so skips correctly transfer spatial structure. In CycleGAN, domains are \textbf{not spatially aligned} — a horse photo and a zebra photo don't share pixel-level correspondence. U-Net skips would copy horse-specific spatial features into the zebra output, creating artifacts. \textbf{ResNet} uses residual blocks that learn \textbf{additive transformations} ($\bx + f(\bx)$) without assuming spatial alignment. Each block refines the representation without shuttling raw spatial features. The identity shortcut also helps training deep generators.
+\end{examq}
+
+\begin{examq}[Q4: Mode Collapse Diagnosis]
+\textbf{Your GAN generates realistic faces but all have brown hair and similar expressions. Diagnose the problem and propose 3 solutions.}
+
+\textbf{Answer:} This is \textbf{partial mode collapse}: the generator found a subset of modes (brown hair, neutral expression) that reliably fool $D$ and collapsed to it. \textbf{Solutions}: (1) \textbf{WGAN-GP}: Earth Mover's distance provides continuous gradients for all modes, not just the dominant ones. (2) \textbf{Minibatch discrimination}: Add a minibatch statistics layer in $D$. If $D$ sees a batch of identical brown-haired faces, it detects the lack of diversity and penalizes $G$. (3) \textbf{Progressive growing (StyleGAN)}: Start with $4{\times}4$ resolution where modes are simpler (just face shape). Gradually increase resolution to $1024{\times}1024$. Each stage stabilizes modes before increasing complexity. Prevents high-res mode collapse.
+\end{examq}
+
+\begin{examq}[Q5: Vanishing Gradient Problem]
+\textbf{Show mathematically why strongly trained $D$ gives vanishing gradients to $G$, and how WGAN fixes this.}
+
+\textbf{Answer:} Standard GAN $G$ gradient: $\nabla_\theta \log(1-D(G(\bz))) = \frac{-D'(G(\bz))}{1-D(G(\bz))} \nabla_\theta G(\bz)$. When $D$ is strong: $D(G(\bz)) \approx 0$ for all fakes $\Rightarrow$ $\frac{-D'}{1-0} \approx -D'$ which gets small as $D$ learns to output exactly 0 for fakes (flat activation). \textbf{WGAN}: $G$ gradient $= -\nabla_\theta D(G(\bz)) = -D'(G(\bz))\nabla_\theta G(\bz)$. No $\log$, no division. The Lipschitz constraint ($\|D'\| \leq 1$) ensures $D'$ is bounded and nonzero $\Rightarrow$ $G$ always receives meaningful gradients, regardless of how well-trained $D$ is.
+\end{examq}

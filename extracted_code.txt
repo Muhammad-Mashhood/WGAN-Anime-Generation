@@ -1,0 +1,513 @@
+--- Cell 0 ---
+
+!pip install torch torchvision matplotlib tqdm
+
+
+import torch
+import torch.nn as nn
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+import os
+
+--- Cell 1 ---
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
+
+--- Cell 2 ---
+import os
+print(os.listdir('/kaggle/input'))
+
+--- Cell 3 ---
+import os
+print(os.listdir('/kaggle/input/datasets'))
+
+--- Cell 4 ---
+import os
+print(os.listdir('/kaggle/input/datasets/soumikrakshit'))
+
+--- Cell 5 ---
+import os
+print(os.listdir('/kaggle/input/datasets/soumikrakshit/anime-faces'))
+
+--- Cell 6 ---
+import glob
+from PIL import Image
+
+data_path = "/kaggle/input/datasets/soumikrakshit/anime-faces/data"
+
+image_paths = glob.glob(data_path + "/*.png")
+
+print("Total images:", len(image_paths))
+
+--- Cell 7 ---
+from torch.utils.data import Dataset
+
+class AnimeDataset(Dataset):
+    def __init__(self, image_paths, transform=None):
+        self.image_paths = image_paths
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img = Image.open(self.image_paths[idx]).convert("RGB")
+        
+        if self.transform:
+            img = self.transform(img)
+            
+        return img
+
+--- Cell 8 ---
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
+
+transform = transforms.Compose([
+    transforms.Resize((64, 64)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+
+dataset = AnimeDataset(image_paths, transform=transform)
+
+dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
+
+print("Dataset ready ✅")
+
+--- Cell 9 ---
+import torchvision
+import matplotlib.pyplot as plt
+
+real_batch = next(iter(dataloader))
+
+plt.figure(figsize=(8,8))
+plt.axis("off")
+plt.title("Training Images")
+
+grid = torchvision.utils.make_grid(real_batch[:16], normalize=True)
+plt.imshow(grid.permute(1,2,0))
+plt.show()
+
+--- Cell 10 ---
+import torch.nn as nn
+
+class Generator(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.main = nn.Sequential(
+            # Input: (100,1,1)
+            nn.ConvTranspose2d(100, 512, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(512),
+            nn.ReLU(True),
+
+            # (512,4,4)
+            nn.ConvTranspose2d(512, 256, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(True),
+
+            # (256,8,8)
+            nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(True),
+
+            # (128,16,16)
+            nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+
+            # (64,32,32)
+            nn.ConvTranspose2d(64, 3, 4, 2, 1, bias=False),
+            nn.Tanh()  # Output: [-1,1]
+        )
+
+    def forward(self, x):
+        return self.main(x)
+
+--- Cell 11 ---
+class Discriminator(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.main = nn.Sequential(
+            # (3,64,64)
+            nn.Conv2d(3, 64, 4, 2, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            # (64,32,32)
+            nn.Conv2d(64, 128, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            # (128,16,16)
+            nn.Conv2d(128, 256, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            # (256,8,8)
+            nn.Conv2d(256, 512, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            # (512,4,4)
+            nn.Conv2d(512, 1, 4, 1, 0, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.main(x).view(-1)
+
+--- Cell 12 ---
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+netG = Generator().to(device)
+netD = Discriminator().to(device)
+
+print("Models loaded ✅")
+
+--- Cell 13 ---
+import torch.optim as optim
+
+criterion = nn.BCELoss()
+
+optimizerD = optim.Adam(netD.parameters(), lr=0.0002, betas=(0.5, 0.999))
+optimizerG = optim.Adam(netG.parameters(), lr=0.0002, betas=(0.5, 0.999))
+
+--- Cell 14 ---
+import torch
+
+num_epochs = 10
+
+G_losses = []
+D_losses = []
+
+for epoch in range(num_epochs):
+    for i, real_images in enumerate(dataloader):
+
+        real_images = real_images.to(device)
+        batch_size = real_images.size(0)
+
+        # Labels
+        real_labels = torch.ones(batch_size, device=device)
+        fake_labels = torch.zeros(batch_size, device=device)
+
+        # =========================
+        # Train Discriminator
+        # =========================
+        netD.zero_grad()
+
+        # Real images
+        outputs = netD(real_images)
+        loss_real = criterion(outputs, real_labels)
+
+        # Fake images
+        noise = torch.randn(batch_size, 100, 1, 1, device=device)
+        fake_images = netG(noise)
+
+        outputs = netD(fake_images.detach())
+        loss_fake = criterion(outputs, fake_labels)
+
+        lossD = loss_real + loss_fake
+        lossD.backward()
+        optimizerD.step()
+
+        # =========================
+        # Train Generator
+        # =========================
+        netG.zero_grad()
+
+        outputs = netD(fake_images)
+        lossG = criterion(outputs, real_labels)
+
+        lossG.backward()
+        optimizerG.step()
+
+    G_losses.append(lossG.item())
+    D_losses.append(lossD.item())
+
+    print(f"Epoch [{epoch+1}/{num_epochs}] | Loss D: {lossD.item():.4f} | Loss G: {lossG.item():.4f}")
+
+--- Cell 15 ---
+from torch.utils.data import random_split, DataLoader
+
+train_size = int(0.9 * len(dataset))
+val_size = len(dataset) - train_size
+
+train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+
+print("Train size:", len(train_dataset))
+print("Val size:", len(val_dataset))
+
+--- Cell 16 ---
+import torch.nn as nn
+
+class Critic(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.main = nn.Sequential(
+            nn.Conv2d(3, 64, 4, 2, 1),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(64, 128, 4, 2, 1),
+            nn.InstanceNorm2d(128),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(128, 256, 4, 2, 1),
+            nn.InstanceNorm2d(256),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(256, 512, 4, 2, 1),
+            nn.InstanceNorm2d(512),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(512, 1, 4, 1, 0)
+        )
+
+    def forward(self, x):
+        return self.main(x).view(-1)
+
+--- Cell 17 ---
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+netG = Generator().to(device)
+netC = Critic().to(device)
+
+--- Cell 18 ---
+import torch.optim as optim
+
+optimizerC = optim.Adam(netC.parameters(), lr=0.0002, betas=(0.5, 0.999))
+optimizerG = optim.Adam(netG.parameters(), lr=0.0002, betas=(0.5, 0.999))
+
+--- Cell 19 ---
+import torch
+
+def gradient_penalty(critic, real, fake, device):
+    batch_size = real.size(0)
+
+    epsilon = torch.rand(batch_size, 1, 1, 1, device=device)
+    interpolated = epsilon * real + (1 - epsilon) * fake
+    interpolated.requires_grad_(True)
+
+    mixed_scores = critic(interpolated)
+
+    gradients = torch.autograd.grad(
+        inputs=interpolated,
+        outputs=mixed_scores,
+        grad_outputs=torch.ones_like(mixed_scores),
+        create_graph=True,
+        retain_graph=True
+    )[0]
+
+    gradients = gradients.view(batch_size, -1)
+    gp = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+
+    return gp
+
+--- Cell 20 ---
+with torch.no_grad():
+    noise = torch.randn(16, 100, 1, 1, device=device)
+    fake_images = netG(noise).cpu()
+
+plt.figure(figsize=(8,8))
+plt.axis("off")
+plt.title("Generated Images (WGAN-GP)")
+
+grid = torchvision.utils.make_grid(fake_images, normalize=True)
+plt.imshow(grid.permute(1,2,0))
+plt.show()
+
+--- Cell 21 ---
+def evaluate_wgan(netG, netC, val_loader, device):
+    netG.eval()
+    netC.eval()
+
+    total_g_loss = 0
+    total_c_loss = 0
+
+    with torch.no_grad():
+        for real_images in val_loader:
+            real_images = real_images.to(device)
+            batch_size = real_images.size(0)
+
+            noise = torch.randn(batch_size, 100, 1, 1, device=device)
+            fake_images = netG(noise)
+
+            critic_real = netC(real_images)
+            critic_fake = netC(fake_images)
+
+            lossC = -(torch.mean(critic_real) - torch.mean(critic_fake))
+            lossG = -torch.mean(netC(fake_images))
+
+            total_c_loss += lossC.item()
+            total_g_loss += lossG.item()
+
+    netG.train()
+    netC.train()
+
+    return total_g_loss / len(val_loader), total_c_loss / len(val_loader)
+
+--- Cell 22 ---
+num_epochs = 10
+lambda_gp = 10
+critic_iters = 5
+
+G_losses = []
+C_losses = []
+
+val_G_losses = []
+val_C_losses = []
+
+for epoch in range(num_epochs):
+    for i, real_images in enumerate(train_loader):
+
+        real_images = real_images.to(device)
+        batch_size = real_images.size(0)
+
+        # =========================
+        # Train Critic (5 times)
+        # =========================
+        for _ in range(critic_iters):
+            noise = torch.randn(batch_size, 100, 1, 1, device=device)
+            fake_images = netG(noise)
+
+            critic_real = netC(real_images)
+            critic_fake = netC(fake_images.detach())
+
+            gp = gradient_penalty(netC, real_images, fake_images, device)
+
+            lossC = -(torch.mean(critic_real) - torch.mean(critic_fake)) + lambda_gp * gp
+
+            netC.zero_grad()
+            lossC.backward()
+            optimizerC.step()
+
+        # =========================
+        # Train Generator
+        # =========================
+        noise = torch.randn(batch_size, 100, 1, 1, device=device)
+        fake_images = netG(noise)
+        lossG = -torch.mean(netC(fake_images))
+
+        netG.zero_grad()
+        lossG.backward()
+        optimizerG.step()
+
+    # Save training losses
+    G_losses.append(lossG.item())
+    C_losses.append(lossC.item())
+
+    # =========================
+    # VALIDATION
+    # =========================
+    val_g, val_c = evaluate_wgan(netG, netC, val_loader, device)
+
+    val_G_losses.append(val_g)
+    val_C_losses.append(val_c)
+
+    print(f"Epoch [{epoch+1}/{num_epochs}]")
+    print(f"Train | Loss C: {lossC.item():.4f} | Loss G: {lossG.item():.4f}")
+    print(f"Val   | Loss C: {val_c:.4f} | Loss G: {val_g:.4f}")
+
+--- Cell 23 ---
+import torchvision
+import matplotlib.pyplot as plt
+
+with torch.no_grad():
+    noise = torch.randn(16, 100, 1, 1, device=device)
+    fake_images = netG(noise).cpu()
+
+plt.figure(figsize=(8,8))
+plt.axis("off")
+plt.title("Generated Images (WGAN-GP)")
+
+grid = torchvision.utils.make_grid(fake_images, normalize=True)
+plt.imshow(grid.permute(1,2,0))
+plt.show()
+
+--- Cell 24 ---
+plt.plot(G_losses, label="Train Generator")
+plt.plot(C_losses, label="Train Critic")
+
+plt.plot(val_G_losses, '--', label="Val Generator")
+plt.plot(val_C_losses, '--', label="Val Critic")
+
+plt.legend()
+plt.title("Train vs Validation Loss (WGAN-GP)")
+plt.show()
+
+--- Cell 25 ---
+!pip install gradio
+
+--- Cell 26 ---
+import gradio as gr
+import numpy as np
+from PIL import Image
+
+def generate_anime_faces(num_images=1, seed=None):
+    """Generate anime faces using the trained WGAN-GP generator"""
+    if seed is not None and seed > 0:
+        torch.manual_seed(int(seed))
+    
+    # Generate random noise
+    noise = torch.randn(num_images, 100, 1, 1, device=device)
+    
+    # Generate fake images
+    with torch.no_grad():
+        fake_images = netG(noise).cpu()
+    
+    # Denormalize from [-1, 1] to [0, 1]
+    fake_images = fake_images * 0.5 + 0.5
+    fake_images = torch.clamp(fake_images, 0, 1)
+    
+    # Return single image if only one requested, else return grid
+    if num_images == 1:
+        img_pil = transforms.ToPILImage()(fake_images[0])
+        return img_pil
+    else:
+        # Create a grid of images
+        grid_img = torchvision.utils.make_grid(fake_images, normalize=False)
+        grid_img = grid_img.permute(1, 2, 0).numpy()
+        return Image.fromarray((grid_img * 255).astype(np.uint8))
+
+--- Cell 27 ---
+# Create Gradio interface
+with gr.Blocks(title="Anime Face Generator (WGAN-GP)") as demo:
+    gr.Markdown("# 🎨 Anime Face Generator")
+    gr.Markdown("Generate unique anime faces using a trained WGAN-GP model")
+    
+    with gr.Row():
+        with gr.Column():
+            num_images = gr.Slider(
+                minimum=1,
+                maximum=16,
+                value=1,
+                step=1,
+                label="Number of Faces to Generate"
+            )
+            
+            seed_input = gr.Number(
+                label="Random Seed (optional)",
+                value=None,
+                precision=0
+            )
+            
+            generate_btn = gr.Button("🎲 Generate Faces", variant="primary")
+        
+        with gr.Column():
+            output_image = gr.Image(label="Generated Anime Faces")
+    
+    # Connect button to generation function
+    generate_btn.click(
+        fn=generate_anime_faces,
+        inputs=[num_images, seed_input],
+        outputs=output_image
+    )
+
+demo.launch()
+

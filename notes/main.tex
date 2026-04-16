@@ -1,0 +1,92 @@
+\documentclass[10pt,a4paper,twocolumn]{article}
+\usepackage[margin=0.4in,top=0.3in,bottom=0.3in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{booktabs}
+\usepackage{multicol}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{imakeidx}
+\usepackage{tikz}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{bm}
+\usepackage{cancel}
+\usepackage{tocloft}
+
+% Compact spacing
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2pt}
+\setlength{\columnsep}{12pt}
+\titlespacing*{\section}{0pt}{4pt}{2pt}
+\titlespacing*{\subsection}{0pt}{3pt}{1pt}
+\titlespacing*{\subsubsection}{0pt}{2pt}{1pt}
+\setlist{nosep,leftmargin=*,topsep=0pt,partopsep=0pt}
+
+% Compact title formatting
+\titleformat{\section}{\large\bfseries\color{blue!80!black}}{\thesection}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{blue!60!black}}{\thesubsection}{0.4em}{}
+\titleformat{\subsubsection}{\small\bfseries\color{blue!40!black}}{\thesubsubsection}{0.3em}{}
+
+% Theorem environments
+\newtheorem{definition}{Def}[section]
+\newtheorem{theorem}{Thm}[section]
+\newtheorem{lemma}{Lem}[section]
+
+% Custom boxes
+\newtcolorbox{keybox}[1][]{colback=yellow!5,colframe=orange!80!black,fonttitle=\bfseries\small,title=#1,boxsep=1pt,left=2pt,right=2pt,top=1pt,bottom=1pt}
+\newtcolorbox{examq}[1][]{colback=green!5,colframe=green!60!black,fonttitle=\bfseries\small,title=#1,boxsep=1pt,left=2pt,right=2pt,top=1pt,bottom=1pt}
+\newtcolorbox{warnbox}[1][]{colback=red!5,colframe=red!60!black,fonttitle=\bfseries\small,title=#1,boxsep=1pt,left=2pt,right=2pt,top=1pt,bottom=1pt}
+
+% Quick-ref commands
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\KL}{\text{KL}}
+\newcommand{\diag}{\text{diag}}
+\newcommand{\softmax}{\text{softmax}}
+\newcommand{\sigmoid}{\sigma}
+\newcommand{\norm}[1]{\left\|#1\right\|}
+\newcommand{\bx}{\mathbf{x}}
+\newcommand{\bz}{\mathbf{z}}
+\newcommand{\bw}{\mathbf{w}}
+\newcommand{\btheta}{\boldsymbol{\theta}}
+\newcommand{\bphi}{\boldsymbol{\phi}}
+\newcommand{\bmu}{\boldsymbol{\mu}}
+\newcommand{\bsigma}{\boldsymbol{\sigma}}
+\DeclareMathOperator{\Tr}{Tr}
+
+\makeindex[columns=2,title=Quick Index,intoc]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textbf{Generative AI -- MSc Exam Notes}}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\begin{document}
+
+\begin{center}
+{\LARGE\textbf{Generative AI: Comprehensive Exam Notes}}\\[2pt]
+{\small MSc Computer Science $\bullet$ Open Book Reference $\bullet$ \today}
+\end{center}
+
+\vspace{-8pt}
+\tableofcontents
+\vspace{-4pt}
+
+\input{ch1_vit}
+\input{ch2_mae}
+\input{ch3_gans}
+\input{ch4_clip}
+\input{ch5_unet}
+\input{ch6_vae}
+\input{ch7_diffusion}
+\input{ch8_questions}
+
+% printindex is at end of ch8_questions.tex
+
+\end{document}

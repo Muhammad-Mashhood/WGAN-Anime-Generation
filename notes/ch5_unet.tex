@@ -1,0 +1,243 @@
+% =============================================================================
+% CHAPTER 5: U-Net as Denoiser in Generative Models — EXPANDED
+% =============================================================================
+\section{U-Net as Denoiser in Generative Models}\index{U-Net}
+
+\subsection{Original U-Net (Ronneberger et al., 2015)}\index{U-Net!Original}
+
+\begin{definition}[U-Net]
+A fully convolutional encoder-decoder with \textbf{symmetric skip connections} that concatenate encoder features with decoder features at corresponding resolution levels, forming a characteristic ``U'' shape.
+\end{definition}
+
+\textbf{Original purpose}: Biomedical image segmentation (cell tracking, neuron segmentation).\\
+\textbf{Current role}: The \textbf{de facto backbone} for denoising in diffusion models (DDPM, Stable Diffusion, DALL-E 2, Imagen).
+
+\subsection{U-Net Architecture — Layer by Layer}\index{U-Net!Architecture}
+
+\textbf{Contracting Path (Encoder):}
+\begin{center}\small
+\begin{tabular}{clc}\toprule
+\textbf{Level} & \textbf{Operations} & \textbf{Output Size} \\\midrule
+Input & -- & $256 \times 256 \times 3$ \\
+1 & $3{\times}3$ Conv $\times 2$, ReLU, MaxPool $2{\times}2$ & $128 \times 128 \times 64$ \\
+2 & $3{\times}3$ Conv $\times 2$, ReLU, MaxPool $2{\times}2$ & $64 \times 64 \times 128$ \\
+3 & $3{\times}3$ Conv $\times 2$, ReLU, MaxPool $2{\times}2$ & $32 \times 32 \times 256$ \\
+4 & $3{\times}3$ Conv $\times 2$, ReLU, MaxPool $2{\times}2$ & $16 \times 16 \times 512$ \\
+Bottleneck & $3{\times}3$ Conv $\times 2$, ReLU & $16 \times 16 \times 1024$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Expanding Path (Decoder):}
+\begin{center}\small
+\begin{tabular}{clc}\toprule
+\textbf{Level} & \textbf{Operations} & \textbf{Output Size} \\\midrule
+4' & UpConv $2{\times}2$, \textbf{concat} Enc4, Conv$\times$2 & $32 \times 32 \times 512$ \\
+3' & UpConv $2{\times}2$, \textbf{concat} Enc3, Conv$\times$2 & $64 \times 64 \times 256$ \\
+2' & UpConv $2{\times}2$, \textbf{concat} Enc2, Conv$\times$2 & $128 \times 128 \times 128$ \\
+1' & UpConv $2{\times}2$, \textbf{concat} Enc1, Conv$\times$2 & $256 \times 256 \times 64$ \\
+Output & $1{\times}1$ Conv & $256 \times 256 \times C_{out}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Skip Connections — Why They're Critical}\index{U-Net!Skip Connections}
+$$\mathbf{d}_\ell = [\text{UpConv}(\mathbf{d}_{\ell+1});\; \mathbf{e}_\ell] \quad \text{(channel concatenation)}$$
+
+\begin{keybox}[Skip Connections — Complete Analysis]
+\textbf{Without skip connections} (standard encoder-decoder):
+\begin{itemize}
+\item All information passes through the bottleneck ($16{\times}16$).
+\item Fine spatial details (edges, textures) are lost in downsampling.
+\item Decoder must \emph{hallucinate} fine details from compressed representation.
+\item Result: blurry outputs, loss of spatial precision.
+\end{itemize}
+
+\textbf{With skip connections}:
+\begin{itemize}
+\item Encoder features at each level are directly available to decoder.
+\item \textbf{Low-level features} (edges, gradients) from early encoder layers help decoder precisely localize structures.
+\item \textbf{High-level semantics} from bottleneck guide \emph{what} to decode.
+\item Combination: precise spatial reconstruction with semantic understanding.
+\end{itemize}
+
+\textbf{For denoising specifically}:
+Noise exists across \textbf{all spatial frequencies}:
+\begin{itemize}
+\item \textbf{Low-frequency noise} (brightness variations): captured by deep features (bottleneck).
+\item \textbf{High-frequency noise} (pixel-level Gaussian noise): captured by early encoder features.
+\item Skip connections let the denoiser predict noise at ALL frequencies simultaneously.
+\item Without skips: denoiser can remove low-freq noise but struggles with high-freq detail.
+\end{itemize}
+
+\textbf{Gradient flow benefit}: Direct paths from loss to early layers $\Rightarrow$ better training of shallow layers, especially important for deep U-Nets (50+ layers in some diffusion models).
+\end{keybox}
+
+\subsection{U-Net Modifications for Diffusion Models}\index{U-Net!Diffusion}
+
+The standard U-Net is heavily modified for diffusion. Key additions:
+
+\subsubsection{1. Time Conditioning}\index{U-Net!Time Conditioning}
+The U-Net $\epsilon_\theta(\bx_t, t)$ must know the timestep $t$ to calibrate its denoising behavior. Different noise levels need different denoising strategies.
+
+\textbf{Sinusoidal Time Embedding}\index{Sinusoidal Embedding} (same math as Transformer positional encoding):
+\begin{equation}
+\mathbf{t}_{emb}[2i] = \sin(t / 10000^{2i/d}), \quad \mathbf{t}_{emb}[2i+1] = \cos(t / 10000^{2i/d})
+\end{equation}
+Then project: $\mathbf{t}' = \text{SiLU}(\text{Linear}(\text{SiLU}(\text{Linear}(\mathbf{t}_{emb}))))$
+
+\textbf{Injection via Adaptive Group Normalization (AdaGN)}\index{AdaGN}:
+\begin{equation}
+\boxed{\text{AdaGN}(\mathbf{h}, \mathbf{t}') = (1 + \gamma(\mathbf{t}')) \cdot \text{GroupNorm}(\mathbf{h}) + \beta(\mathbf{t}')}
+\end{equation}
+where $[\gamma, \beta] = \text{Linear}(\mathbf{t}')$ -- scale and bias from time embedding.
+
+\begin{keybox}[Why AdaGN for Time Conditioning]
+\begin{itemize}
+\item \textbf{Why not just add $\mathbf{t}'$ to features?} Addition changes only the bias (shift). AdaGN provides both \textbf{scale} ($\gamma$) and \textbf{shift} ($\beta$), giving richer control.
+\item \textbf{Why not concatenate $t$ as extra channel?} Time is a global property (same for all pixels). Concatenation treats it as spatial, which is wasteful.
+\item \textbf{Why GroupNorm not BatchNorm?} GroupNorm works with small batch sizes (diffusion training often uses small effective batches). BN statistics are unstable with small batches.
+\item \textbf{Intuition}: At high $t$ (lots of noise), $\gamma$ and $\beta$ should configure the network for ``coarse denoising.'' At low $t$ (little noise), configure for ``fine detail refinement.''
+\end{itemize}
+\end{keybox}
+
+\subsubsection{2. Self-Attention Layers}\index{U-Net!Self-Attention}
+Added at low-resolution feature maps (typically $16{\times}16$ and $8{\times}8$):
+$$\text{SelfAttn}(\mathbf{Z}) = \softmax\!\left(\frac{(\mathbf{Z}\mathbf{W}_Q)(\mathbf{Z}\mathbf{W}_K)^\top}{\sqrt{d}}\right)(\mathbf{Z}\mathbf{W}_V) + \mathbf{Z}$$
+where each spatial position is treated as a token.
+
+\textbf{Why self-attention in denoiser?}
+\begin{itemize}
+\item Convolutions are local: $3{\times}3$ kernel sees 9 pixels. For generating symmetric faces, left-eye and right-eye need to coordinate across $\sim$100 pixels. Convolutions need $\sim$50 layers for this receptive field.
+\item Self-attention: \textbf{global} connectivity in one layer. Left-eye features directly attend to right-eye features $\Rightarrow$ symmetry, coherence.
+\item \textbf{Only at low-res}: At $16{\times}16$, sequence length = $256$ tokens. Attention cost: $256^2 \times d = $ manageable. At $256{\times}256$: $65536$ tokens $\Rightarrow$ $65536^2$ = 4 billion operations per layer — prohibitive!
+\end{itemize}
+
+\subsubsection{3. Cross-Attention for Text Conditioning}\index{U-Net!Cross-Attention}\index{Cross-Attention}
+For text-to-image (Stable Diffusion), cross-attention layers inject text information:
+\begin{equation}
+\boxed{\text{CrossAttn}(\mathbf{Z}, \mathbf{c}) = \softmax\!\left(\frac{(\mathbf{Z}\mathbf{W}_Q)(\mathbf{c}\mathbf{W}_K)^\top}{\sqrt{d}}\right)(\mathbf{c}\mathbf{W}_V)}
+\end{equation}
+where $\mathbf{Z}$ = image features (\textbf{queries}), $\mathbf{c}$ = CLIP text embeddings (\textbf{keys and values}).
+
+\begin{keybox}[Cross-Attention — How Text Controls Image]
+\begin{itemize}
+\item Each spatial position in image features ``queries'' the text tokens.
+\item If spatial position $(x,y)$ corresponds to sky, it attends more to the word ``blue'' or ``cloudy.''
+\item This creates \textbf{spatial-semantic binding}: specific image regions are guided by specific text words.
+\item \textbf{Attention maps} reveal which text tokens influence which image regions. ``A cat sitting on a mat'': cat-region attends to ``cat'', mat-region attends to ``mat.'' 
+\item This is why prompt structure matters: ``red car'' binds red to car; ``car red'' may not.
+\end{itemize}
+\end{keybox}
+
+\subsubsection{4. ResNet Blocks in Diffusion U-Net}\index{U-Net!ResNet Blocks}
+Each level uses \textbf{residual blocks} with time conditioning:
+\begin{enumerate}
+\item GroupNorm $\to$ SiLU $\to$ Conv3$\times$3
+\item Add time embedding ($\mathbf{t}'$ projected to channel dimension)
+\item GroupNorm $\to$ SiLU $\to$ Dropout $\to$ Conv3$\times$3
+\item Residual connection ($1{\times}1$ conv if channels change)
+\end{enumerate}
+
+\textbf{Why residual blocks?}
+\begin{itemize}
+\item Deep U-Nets ($\sim$50 layers) need residual connections for gradient flow.
+\item Each block learns a \textbf{refinement} (residual) rather than full transformation.
+\item Better with time conditioning: the time embedding modulates the residual, adjusting the ``amount'' of denoising.
+\end{itemize}
+
+\subsection{Complete Diffusion U-Net Architecture}\index{U-Net!Full Architecture}
+
+\textbf{Stable Diffusion v1.5 U-Net}: 860M parameters.
+
+\begin{center}\small
+\begin{tabular}{lcccc}\toprule
+\textbf{Resolution} & \textbf{Channels} & \textbf{ResBlocks} & \textbf{Self-Attn} & \textbf{Cross-Attn} \\\midrule
+$64 \times 64$ & 320 & 2 & No & Yes \\
+$32 \times 32$ & 640 & 2 & Yes & Yes \\
+$16 \times 16$ & 1280 & 2 & Yes & Yes \\
+$8 \times 8$ (bottleneck) & 1280 & 1 & Yes & Yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Latent Diffusion: U-Net in Compressed Space}\index{Latent Diffusion}\index{Stable Diffusion}
+
+\textbf{Key insight}: Pixel-space diffusion on $512{\times}512$ is prohibitively expensive. Solution: denoise in \textbf{latent space}.
+
+\begin{enumerate}
+\item \textbf{VAE Encoder} $\mathcal{E}$: $512{\times}512{\times}3 \to 64{\times}64{\times}4$ (compression ratio: $48\times$).
+\item \textbf{U-Net denoises latent}: $\epsilon_\theta(\bz_t, t, \mathbf{c})$ in $64{\times}64{\times}4$ space.
+\item \textbf{VAE Decoder} $\mathcal{D}$: $64{\times}64{\times}4 \to 512{\times}512{\times}3$.
+\end{enumerate}
+
+\textbf{Compute savings}: Pixel-space attention at $64{\times}64$: $64^2 = 4096$ tokens. Pixel-space at $512{\times}512$: impossible (262144 tokens). Latent diffusion makes high-res generation tractable.
+
+\subsection{ControlNet: Extending U-Net for Spatial Control}\index{ControlNet}
+\textbf{Problem}: Text alone can't specify spatial layout (``cat on the LEFT'').
+
+\textbf{ControlNet solution}: Clone the U-Net encoder. Feed conditioning signal (edge map, depth map, pose skeleton) through the clone. Add clone's outputs to the original U-Net's decoder via zero-initialized convolutions.
+
+\textbf{Why ``zero convolution''?} Initially contributes nothing $\Rightarrow$ model starts from pre-trained weights unmodified. Gradually learns to incorporate spatial conditioning without destroying pre-trained quality.
+
+\subsection{DiT: Replacing U-Net with Transformer}\index{DiT}
+\textbf{Diffusion Transformer} (Peebles \& Xie, 2023): Replaces entire U-Net with a standard ViT.
+
+\textbf{Architecture}: Patchify latent $\to$ add position embeddings $\to$ $N$ Transformer blocks with AdaLN (Adaptive LayerNorm for time/class conditioning) $\to$ unpatchify.
+
+\textbf{Advantages over U-Net}:
+\begin{itemize}
+\item \textbf{Simpler}: No encoder-decoder, no skip connections, no upsampling.
+\item \textbf{Scales better}: Clean power-law scaling with compute (Gflops $\propto$ quality).
+\item \textbf{Leverages vision transformer advances}: ViT optimizations, FlashAttention, etc.
+\end{itemize}
+\textbf{Disadvantage}: At small scale, U-Net's inductive bias (multi-scale features) gives better results. DiT needs large compute to surpass U-Net.
+
+\textbf{Trend}: SORA (video generation), Stable Diffusion 3, Flux all use Transformer-based architectures, replacing U-Net.
+
+\subsection{When to Use U-Net / When NOT}\index{U-Net!When to Use}
+\begin{center}\small
+\begin{tabular}{p{0.45\linewidth}p{0.45\linewidth}}\toprule
+\textbf{Use U-Net When} & \textbf{Avoid U-Net When} \\\midrule
+Pixel/latent-level prediction needed & Simple classification (use encoder only) \\
+Multi-scale features critical & Scalability is priority (use DiT) \\
+Moderate resolution ($\leq 512^2$) & Very high resolution without cascading \\
+Established diffusion pipeline & Cutting-edge scaling ($>$1B params, use Transformer) \\
+Spatial correspondence in/out & Input/output have different structure \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Exam Questions — U-Net (Expanded)}\index{U-Net!Exam Questions}
+
+\begin{examq}[Q1: Architectural Analysis]
+\textbf{Why are self-attention layers only added at low resolution ($\leq 32{\times}32$) in diffusion U-Nets?}
+
+\textbf{Answer:} Self-attention has $O(N^2)$ complexity where $N$ = number of spatial positions. At $256{\times}256$: $N = 65536$, requiring $65536^2 \approx 4.3 \times 10^9$ operations per attention layer — computationally infeasible. At $16{\times}16$: $N = 256$, cost = $256^2 = 65536$ operations — manageable. Furthermore, at low resolution, each ``token'' has a large receptive field (each $16{\times}16$ position represents a $16{\times}16$ patch of the original), so attention at this level captures meaningful \textbf{global semantic relationships} (left eye $\leftrightarrow$ right eye, sky $\leftrightarrow$ ground). High-resolution convolutions handle local texture details efficiently.
+\end{examq}
+
+\begin{examq}[Q2: Design — Text Conditioning]
+\textbf{Explain step-by-step how the prompt ``a red car on a green hill'' controls the U-Net denoising process in Stable Diffusion.}
+
+\textbf{Answer:} (1) CLIP text encoder tokenizes and produces 77 embeddings of dim 768. Key tokens: ``red'', ``car'', ``green'', ``hill.'' (2) Noisy latent $\bz_t$ enters U-Net. At each level ($32^2$, $16^2$, $8^2$), image features are projected to queries $\mathbf{Q}$. (3) Text embeddings are projected to keys $\mathbf{K}$ and values $\mathbf{V}$. (4) Cross-attention: $\softmax(\mathbf{Q}\mathbf{K}^\top/\sqrt{d})\mathbf{V}$. Spatial positions representing the car region produce queries that have high dot product with ``red car'' keys $\Rightarrow$ attend to ``red car'' values. Hill region attends to ``green hill.'' (5) The attended text features are added to image features, biasing denoising toward producing red pixels in car-like regions and green pixels in hill-like regions. (6) This happens at \textbf{every denoising step} ($T$ times), iteratively sharpening the text-image alignment.
+\end{examq}
+
+\begin{examq}[Q3: Comparison]
+\textbf{Compare U-Net vs DiT as diffusion backbones across 5 dimensions.}
+
+\textbf{Answer:}
+\begin{tabular}{lll}
+\textbf{Dim} & \textbf{U-Net} & \textbf{DiT} \\
+Architecture & Encoder-decoder + skips & Flat Transformer \\
+Inductive bias & Multi-scale (conv) & Minimal \\
+Scaling & Complex to scale & Clean power-law \\
+Small compute & \textbf{Better} (bias helps) & Worse \\
+Large compute & Good & \textbf{Better} (scaling law) \\
+\end{tabular}
+\end{examq}
+
+\begin{examq}[Q4: Scenario]
+\textbf{Your U-Net diffusion model generates images with good global structure but blurry textures. Diagnose and fix.}
+
+\textbf{Answer:} \textbf{Diagnosis}: The model captures low-frequency content (global structure) but fails at high-frequency (texture). This suggests skip connections or high-resolution convolutions are weak. \textbf{Fixes}: (1) Add \textbf{more ResBlocks at high resolution} (Level 1, $128{\times}128$). Currently may have only 1; increase to 3. (2) Use \textbf{perceptual loss} (VGG feature matching) in addition to MSE noise prediction. (3) Apply \textbf{classifier-free guidance} with $w > 1$ at inference — amplifies conditional signal, sharpening details. (4) Check if \textbf{skip connections} are properly connected — missing skips would lose high-freq info. (5) Increase training resolution or use \textbf{progressive training} (train at $64^2$, then $256^2$).
+\end{examq}

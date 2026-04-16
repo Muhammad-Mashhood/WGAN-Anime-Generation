@@ -1,0 +1,159 @@
+% =============================================================================
+% CHAPTER 8: Cross-Topic Review, Quick Reference, Exam Strategy
+% =============================================================================
+\section{Cross-Topic Review \& Quick Reference}\index{Quick Reference}
+
+\subsection{Master Decision Tree: Which Model For What?}\index{Decision Tree}
+
+\begin{center}\small
+\begin{tabular}{p{0.55\linewidth}l}\toprule
+\textbf{Scenario} & \textbf{Best Choice} \\\midrule
+Large unlabeled image dataset, want pre-training & MAE \\
+Classify images into open-ended categories & CLIP (zero-shot) \\
+Generate photorealistic images from text & Diffusion + CFG \\
+Paired image-to-image (sketch $\to$ photo) & Pix2Pix \\
+Unpaired style transfer (horse $\to$ zebra) & CycleGAN \\
+Smooth latent space for interpolation & VAE \\
+Fast unconditional face generation & StyleGAN \\
+Dense prediction (detection, segmentation) backbone & MAE pre-trained ViT \\
+Real-time generation ($<$0.5s) & Consistency model / distilled GAN \\
+Anomaly detection with likelihood & VAE ($-$ELBO as score) \\
+Multi-modal alignment (image + text) & CLIP \\
+Controlled spatial generation (with edge/pose maps) & ControlNet + Diffusion \\
+Compress images for efficient diffusion & VAE (latent diffusion encoder) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Key Losses: Quick Reference}\index{Loss Functions}
+\begin{center}\small
+\begin{tabular}{p{0.22\linewidth}p{0.68\linewidth}}\toprule
+\textbf{Model} & \textbf{Loss} \\\midrule
+ViT & Cross-entropy: $-\sum_c y_c\log\hat{y}_c$ \\
+MAE & MSE on masked: $\frac{1}{|\mathcal{M}|}\sum_{i\in\mathcal{M}}\|\hat{\bx}_i-\bx_i\|^2$ \\
+GAN & $\min_G\max_D \E[\log D(\bx)]+\E[\log(1-D(G(\bz)))]$ \\
+WGAN & $\max_D \E[D(\bx)]-\E[D(G(\bz))]$ s.t. $\|D\|_L\leq 1$ \\
+Pix2Pix & $\mathcal{L}_{cGAN} + 100\|\mathbf{y}-G(\bx)\|_1$ \\
+CycleGAN & $\mathcal{L}_{GAN}(G)+\mathcal{L}_{GAN}(F)+10\mathcal{L}_{cyc}$ \\
+InfoNCE & $-\log\frac{\exp(\text{sim}(i,j)/\tau)}{\sum_k\exp(\text{sim}(i,k)/\tau)}$ \\
+CLIP & Symmetric InfoNCE: $\frac{1}{2}(\mathcal{L}_{I\to T}+\mathcal{L}_{T\to I})$ \\
+VAE & $-\E_q[\log p(\bx|\bz)]+\KL(q(\bz|\bx)\|p(\bz))$ \\
+DDPM & $\E_{t,\bx_0,\epsilon}[\|\epsilon-\epsilon_\theta(\bx_t,t)\|^2]$ \\
+CFG & $\hat\epsilon = (1-w)\epsilon_{uncond} + w\cdot\epsilon_{cond}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Key Formulas: Must-Know for Exam}\index{Key Formulas}
+
+\textbf{1. Attention}: $\text{Att}(Q,K,V) = \text{softmax}(QK^\top/\sqrt{d_k})V$ \\[2pt]
+\textbf{2. ViT Patches}: $N = H^2/P^2$, embed dim $= P^2 \cdot C$ \\[2pt]
+\textbf{3. MAE Efficiency}: $\text{Encoder tokens} = (1-r) \cdot N$, speedup $\propto 1/(1-r)^2$ \\[2pt]
+\textbf{4. GAN Optimal $D$}: $D^*(\bx) = p_d(\bx)/(p_d(\bx)+p_g(\bx))$ \\[2pt]
+\textbf{5. JSD}: $V(G,D^*) = 2\text{JSD}(p_d\|p_g) - \log 4$ \\[2pt]
+\textbf{6. Cosine Similarity}: $\text{sim}(\mathbf{u},\mathbf{v}) = \mathbf{u}^\top\mathbf{v}/(\|\mathbf{u}\|\|\mathbf{v}\|)$ \\[2pt]
+\textbf{7. ELBO}: $\log p(\bx) = \text{ELBO} + \KL(q\|p(\bz|\bx)) \geq \text{ELBO}$ \\[2pt]
+\textbf{8. KL (Gaussian)}: $\KL = -\frac{1}{2}\sum(1+\log\sigma^2-\mu^2-\sigma^2)$ \\[2pt]
+\textbf{9. Reparameterize}: $\bz = \bmu + \bsigma \odot \epsilon$, \quad $\epsilon \sim \mathcal{N}(0,I)$ \\[2pt]
+\textbf{10. Forward Diffusion}: $\bx_t = \sqrt{\bar\alpha_t}\bx_0 + \sqrt{1-\bar\alpha_t}\epsilon$ \\[2pt]
+\textbf{11. Reverse Mean}: $\bmu_\theta = \frac{1}{\sqrt{\alpha_t}}(\bx_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\epsilon_\theta)$ \\[2pt]
+\textbf{12. SNR}: $\text{SNR}(t) = \bar\alpha_t/(1-\bar\alpha_t)$
+
+\subsection{Architecture Connections}\index{Architecture Connections}
+\begin{center}\small
+\begin{tabular}{p{0.35\linewidth}p{0.55\linewidth}}\toprule
+\textbf{Connection} & \textbf{Explanation} \\\midrule
+CLIP $\to$ Stable Diffusion & CLIP text encoder provides conditioning vectors for U-Net cross-attention. \\
+VAE $\to$ Stable Diffusion & VAE encoder compresses images to latent space where diffusion operates. \\
+ViT $\to$ CLIP & CLIP uses ViT as its image encoder. \\
+ViT $\to$ MAE & MAE's encoder IS a ViT; pretext task teaches the ViT. \\
+U-Net $\to$ Pix2Pix & Pix2Pix generator is a U-Net with skip connections. \\
+U-Net $\to$ DDPM & DDPM denoiser is a modified U-Net with time + text conditioning. \\
+Attention $\to$ Everything & ViT, CLIP, Diffusion U-Net, GPT all use the same attention formula. \\
+Contrastive $\to$ CLIP & CLIP training objective is InfoNCE applied cross-modally. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Common Misconceptions (Exam Traps)}\index{Misconceptions}
+\begin{enumerate}
+\item \textbf{``MAE reduces model capacity''}: No. Architecture and params identical. Masking changes the \emph{task}, not the model.
+\item \textbf{``ViT can't work on small data''}: It can — with pre-training (MAE/DINO) or distillation (DeiT).
+\item \textbf{``GAN discriminator outputs real/fake''}: It outputs $P(\text{real})$. At optimality: $D^*(x) = p_d/(p_d+p_g)$.
+\item \textbf{``More parameters = more overfitting''}: Double descent shows overparameterized models can generalize better.
+\item \textbf{``VAE loss is just MSE''}: It's MSE (reconstruction) + KL (regularization). Both are essential.
+\item \textbf{``Diffusion is slow''}: DDIM, consistency models, and latent diffusion make it practical.
+\item \textbf{``CLIP understands spatial layout''}: No. It's a bag-of-patches/words. ``Dog bites man'' $\approx$ ``Man bites dog.''
+\item \textbf{``CycleGAN can change geometry''}: No. Cycle consistency forces structure preservation. Only texture/style transfers.
+\item \textbf{``Temperature in softmax just scales logits''}: It changes gradient dynamics. Low $\tau$ $\Rightarrow$ vanishing gradients, high $\tau$ $\Rightarrow$ weak learning signal.
+\item \textbf{``Pre-Norm and Post-Norm are interchangeable''}: Pre-Norm provides cleaner gradient flow; critical for $L > 12$ layers.
+\end{enumerate}
+
+\subsection{Scenario-Based Cross-Topic Questions}\index{Cross-Topic Questions}
+
+\begin{examq}[Scenario 1: Medical Imaging Pipeline]
+\textbf{Design a complete pipeline for generating synthetic chest X-rays from text descriptions (e.g., ``bilateral pleural effusion, minimal cardiomegaly'').}
+
+\textbf{Answer:} \textbf{Step 1}: Pre-train on 500K unlabeled X-rays using \textbf{MAE} (75\% masking). This learns anatomical features without labels. \textbf{Step 2}: Fine-tune a \textbf{CLIP} model on 50K X-ray + radiology report pairs. This creates text-image alignment for medical concepts. \textbf{Step 3}: Train a \textbf{latent diffusion model}: (a) VAE compresses X-rays to $64^2$ latent. (b) U-Net denoiser with CLIP text encoder providing cross-attention conditioning. (c) Train with DDPM loss + classifier-free guidance (10\% conditioning dropout). \textbf{Step 4}: Generate: Text $\to$ CLIP $\to$ U-Net denoising $\to$ VAE decode $\to$ X-ray. CFG $w = 5$ for medical accuracy. \textbf{Why not GAN?}: Mode collapse would produce limited pathology variety. Diffusion covers all modes. \textbf{Why MAE first?}: Initializes ViT encoder with domain knowledge, reducing data needs for CLIP and diffusion training.
+\end{examq}
+
+\begin{examq}[Scenario 2: Self-Supervised vs Supervised]
+\textbf{You have 1M satellite images: 990K unlabeled, 10K labeled. Compare three strategies: (A) Supervised ViT on 10K, (B) MAE pre-train on 1M + fine-tune on 10K, (C) CLIP with synthetic captions on 1M + zero-shot.}
+
+\textbf{Answer:} \textbf{(A) Supervised 10K}: ViT-Base on 10K will severely overfit. Expected: $\sim$65\% acc. Too little data for transformer without inductive bias. \textbf{(B) MAE + fine-tune}: Pre-train MAE on all 1M (no labels needed). Encoder learns terrain features, textures, spatial patterns. Fine-tune on 10K labeled: expected $\sim$85{-}90\%$. This is the best strategy — MAE leverages all data, fine-tuning adapts to labels. \textbf{(C) CLIP + zero-shot}: Generate synthetic captions (e.g., using location metadata: ``satellite view of forest in Oregon''). Train CLIP on 1M pairs. Zero-shot classify by matching to class text prompts. Expected: $\sim$70{-}75\%$ — limited by caption quality and zero-shot gap. But doesn't need the 10K labels at all! \textbf{Best}: Strategy B (highest accuracy). Strategy C is good if 10K labels unavailable.
+\end{examq}
+
+\begin{examq}[Scenario 3: Why Diffusion Replaced GANs]
+\textbf{In 2020, GANs dominated image generation. By 2024, diffusion models dominate. Give 3 technical reasons for this shift.}
+
+\textbf{Answer:} (1) \textbf{Training stability}: GAN minimax is notoriously unstable — mode collapse, oscillation, requires careful tuning ($D/G$ learning rate ratio, progressive growing). Diffusion: simple MSE loss, stable training. No adversarial dynamics. (2) \textbf{Mode coverage}: GANs frequently collapse to a subset of modes. FID may be good, but precision-recall analysis shows low recall (missing modes). Diffusion models have strong theoretical coverage guarantees — they learn the full $p(\bx)$, not just high-density regions. (3) \textbf{Conditioning}: Text-to-image with GANs requires separate conditioning networks (StackGAN, AttnGAN), complex training. Diffusion naturally incorporates conditioning via cross-attention + classifier-free guidance. Single training loss handles both conditional and unconditional generation. Adding ControlNet for spatial control is trivial in diffusion framework.
+\end{examq}
+
+\begin{examq}[Scenario 4: Building Blocks Question]
+\textbf{``Attention is all you need'' — but modern generative models use attention, convolutions, residual connections, skip connections, and normalization. Explain the specific role of each.}
+
+\textbf{Answer:} (1) \textbf{Attention}: Global token mixing. Which spatial positions should share information. Enables long-range dependencies in one layer. (2) \textbf{Convolutions}: Local feature extraction. Efficient ($O(k^2)$ vs $O(N^2)$). Encode translation equivariance. In U-Net: most computation is conv. (3) \textbf{Residual connections}: $f(\bx) + \bx$. Enable training of deep networks by providing gradient shortcuts. Without them, networks above 20 layers degrade. (4) \textbf{Skip connections} (U-Net): Bridge encoder to decoder at matching resolutions. Preserve fine spatial detail through the bottleneck. Critical for denoising high-frequency noise. (5) \textbf{Normalization}: BatchNorm/GroupNorm/LayerNorm stabilize activation distributions. AdaGN in diffusion U-Net also injects time conditioning. Pre-Norm (before sublayer) vs Post-Norm (after): Pre-Norm gives cleaner gradient flow. Each component addresses a different aspect of deep generative networks.
+\end{examq}
+
+\begin{examq}[Scenario 5: Overparameterization \& Double Descent]
+\textbf{A ViT-Huge pre-trained with MAE achieves near-zero reconstruction error on training images yet generalizes to unseen regions. Explain this using modern learning theory.}
+
+\textbf{Answer:} \textbf{Classical theory}: Zero training error $\Rightarrow$ overfitting $\Rightarrow$ high test error. This follows the U-shaped bias-variance trade-off. \textbf{Modern theory} (double descent, Belkin 2019): Beyond the interpolation threshold (model has enough params to memorize all training data), increasing model size actually \textit{decreases} test error. This ``second descent'' occurs because the optimizer (SGD + weight decay) finds increasingly smooth solutions among the many interpolating solutions. \textbf{For MAE specifically}: Pre-training constrains the model to a favorable region of weight space before fine-tuning. The model doesn't merely memorize training images — it learns general visual patterns (edges, textures, object parts) that happen to perfectly reconstruct training images AND generalize to unseen ones. The reconstruction task itself is semantically meaningful (unlike random labels, which would cause genuine overfitting).
+\end{examq}
+
+\subsection{Exam Strategy for 1-Hour Open-Book}\index{Exam Strategy}
+
+\begin{warnbox}[Exam Strategy Checklist]
+\begin{enumerate}
+\item \textbf{Read the question twice}. Identify keywords: ``from a generative modeling perspective,'' ``connect to the reconstruction objective,'' ``state what MAE actually changes.'' These constrain your answer.
+\item \textbf{Respect line limits} (Mid-1: max 4 lines). Be precise. No padding.
+\item \textbf{Use this document}: Search the Table of Contents or Index for the relevant topic.
+\item \textbf{Mathematical questions}: Show intermediate steps. State assumptions.
+\item \textbf{Scenario questions}: (a) Name the model. (b) State why. (c) State why not alternatives.
+\item \textbf{``Explain why X is incorrect''}: (a) State X's assumption. (b) State the flaw. (c) State the correct explanation.
+\item \textbf{Don't conflate capacity with data efficiency}: Model size $\neq$ overfitting tendency.
+\item \textbf{Always mention the trade-off}: Reconstruction vs regularization (VAE), quality vs diversity (CFG), data vs compute (ViT).
+\end{enumerate}
+\end{warnbox}
+
+\subsection{Glossary of Key Terms}\index{Glossary}
+\begin{center}\small
+\begin{tabular}{p{0.22\linewidth}p{0.68\linewidth}}\toprule
+\textbf{Term} & \textbf{Definition} \\\midrule
+Inductive Bias & Built-in assumptions in architecture (CNN: locality; Transformer: none). \\
+Mode Collapse & Generator produces limited variety, ignoring data diversity. \\
+Posterior Collapse & VAE encoder ignores input ($q \to p$), decoder works alone. \\
+Reparameterization & Separating randomness ($\epsilon$) from learnable params ($\mu, \sigma$). \\
+ELBO & Evidence Lower Bound: $\log p(x) \geq$ ELBO = reconstruction $-$ KL. \\
+InfoNCE & Contrastive loss based on ($N-1$)-way classification of positive pair. \\
+AdaGN & Adaptive Group Norm: injects time/class conditioning via scale \& shift. \\
+CFG & Classifier-Free Guidance: amplifies conditional signal by weight $w$. \\
+PatchGAN & Discriminator classifying local patches instead of full images. \\
+Cycle Consistency & $F(G(x)) \approx x$: enforces content preservation in unpaired translation. \\
+Score Function & $\nabla_x \log p(x)$: direction toward higher data density. \\
+Double Descent & Test error decreases again after interpolation threshold in overparameterized models. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\printindex

@@ -1,0 +1,321 @@
+% =============================================================================
+% CHAPTER 7: Forward Pass of Diffusion Networks — EXPANDED
+% Paper: "Denoising Diffusion Probabilistic Models" (Ho et al., 2020)
+% =============================================================================
+\section{Diffusion Models — Forward Pass \& Complete Theory}\index{Diffusion Models}\index{DDPM}
+
+\subsection{Core Idea}\index{Diffusion!Core Idea}
+\begin{definition}[Diffusion Model]
+A generative model that defines two processes: (1) a \textbf{forward process} that gradually adds Gaussian noise to data over $T$ steps until it becomes pure noise, and (2) a \textbf{reverse process} that learns to gradually denoise, starting from noise and recovering data.
+\end{definition}
+
+\textbf{Analogy}: Drop ink into water. Forward: ink diffuses, becoming uniform (noise). Reverse: ``un-diffuse'' the ink back to the original drop. If you learn to reverse each tiny step, you can generate ink drops from uniform water.
+
+\textbf{Why diffusion works}: Each step adds/removes only a \textit{tiny} amount of noise. Predicting the noise at step $t$ is a \emph{simpler} task than generating an entire image at once. The model decomposes the hard generation problem into $T$ easy denoising problems.
+
+\subsection{Forward Process (Diffusion Process) — Full Derivation}\index{Diffusion!Forward Process}
+
+\subsubsection{Single Step}
+$$q(\bx_t|\bx_{t-1}) = \mathcal{N}(\bx_t; \sqrt{1-\beta_t}\,\bx_{t-1}, \beta_t\mathbf{I})$$
+
+\begin{keybox}[Forward Step — Every Component]
+\begin{itemize}
+\item $\bx_0$: Clean data (original image). $\bx_T$: Pure noise $\sim \mathcal{N}(\mathbf{0}, \mathbf{I})$.
+\item $\beta_t \in (0,1)$: Noise schedule. Controls how much noise is added at step $t$. Typically: $\beta_1 = 10^{-4}$, $\beta_T = 0.02$, linearly interpolated.
+\item $\sqrt{1-\beta_t}\,\bx_{t-1}$: \textbf{Scale down} the signal. Factor $<1$ ensures signal decays.
+\item $\beta_t\mathbf{I}$: \textbf{Add noise} with variance $\beta_t$.
+\item $\sqrt{1-\beta_t}$ and $\beta_t$ are carefully chosen so that at step $T$: signal $\approx 0$, noise variance $\approx 1$. The variances are designed to preserve the total variance at approximately 1 throughout.
+\end{itemize}
+\end{keybox}
+
+\textbf{Explicit sampling:}
+$$\bx_t = \sqrt{1-\beta_t}\,\bx_{t-1} + \sqrt{\beta_t}\,\epsilon_{t-1}, \quad \epsilon_{t-1} \sim \mathcal{N}(\mathbf{0},\mathbf{I})$$
+
+\subsubsection{Noise Schedule Choices}\index{Diffusion!Noise Schedule}
+\begin{center}\small
+\begin{tabular}{lcc}\toprule
+\textbf{Schedule} & \textbf{$\beta_t$} & \textbf{Notes} \\\midrule
+Linear & $\beta_1 = 10^{-4} \to \beta_T = 0.02$ & DDPM default \\
+Cosine & $\beta_t = 1 - \frac{\bar{\alpha}_t}{\bar{\alpha}_{t-1}}$, $\bar\alpha_t = \frac{f(t)}{f(0)}$, $f(t) = \cos^2(\frac{t/T+s}{1+s}\cdot\frac{\pi}{2})$ & Better for low-res \\
+Sigmoid & $\beta_t = \text{sigmoid}(-6+12t/T)(\beta_{max}-\beta_{min}) + \beta_{min}$ & Smooth transition \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Why cosine is better:} Linear schedule wastes many steps in the middle where $\bx_t \approx \bx_{t-1}$ (almost no noise added). Cosine distributes ``information destruction'' more uniformly across steps, so each step is equally important.
+
+\subsubsection{Closed-Form: Jump to Any Step $t$}\index{Diffusion!Closed Form}
+Define $\alpha_t = 1 - \beta_t$ and $\bar{\alpha}_t = \prod_{s=1}^t \alpha_s$:
+\begin{equation}\label{eq:forward_closed}
+\boxed{q(\bx_t|\bx_0) = \mathcal{N}(\bx_t; \sqrt{\bar\alpha_t}\,\bx_0, (1-\bar\alpha_t)\mathbf{I})}
+\end{equation}
+
+\begin{keybox}[Closed-Form Derivation — Step by Step]
+\textbf{Goal:} Express $\bx_t$ directly in terms of $\bx_0$, not recursively.
+
+\textbf{Step 1}: $\bx_1 = \sqrt{\alpha_1}\bx_0 + \sqrt{1-\alpha_1}\epsilon_0$
+
+\textbf{Step 2}: $\bx_2 = \sqrt{\alpha_2}\bx_1 + \sqrt{1-\alpha_2}\epsilon_1$\\
+$= \sqrt{\alpha_2}(\sqrt{\alpha_1}\bx_0 + \sqrt{1-\alpha_1}\epsilon_0) + \sqrt{1-\alpha_2}\epsilon_1$\\
+$= \sqrt{\alpha_1\alpha_2}\bx_0 + \sqrt{\alpha_2(1-\alpha_1)}\epsilon_0 + \sqrt{1-\alpha_2}\epsilon_1$
+
+\textbf{Combining noise terms}: Sum of two independent Gaussians:\\
+$\sqrt{\alpha_2(1-\alpha_1)}\epsilon_0 + \sqrt{1-\alpha_2}\epsilon_1 \sim \mathcal{N}(0, [\alpha_2(1-\alpha_1) + (1-\alpha_2)]\mathbf{I})$\\
+$= \mathcal{N}(0, [\alpha_2 - \alpha_1\alpha_2 + 1 - \alpha_2]\mathbf{I}) = \mathcal{N}(0, (1-\alpha_1\alpha_2)\mathbf{I})$
+
+So: $\bx_2 = \sqrt{\bar\alpha_2}\bx_0 + \sqrt{1-\bar\alpha_2}\bar\epsilon$ where $\bar\alpha_2 = \alpha_1\alpha_2$.
+
+\textbf{Induction}: By repeating, $\bx_t = \sqrt{\bar\alpha_t}\bx_0 + \sqrt{1-\bar\alpha_t}\epsilon$ where $\bar\alpha_t = \prod_{s=1}^t \alpha_s$.
+
+\textbf{Key property of Gaussian sum}: If $X \sim \mathcal{N}(0, \sigma_1^2)$ and $Y \sim \mathcal{N}(0, \sigma_2^2)$ are independent, then $X + Y \sim \mathcal{N}(0, \sigma_1^2 + \sigma_2^2)$. This is why we can merge all noise terms into one.
+\end{keybox}
+
+\textbf{Direct sampling formula:}
+\begin{equation}\label{eq:xt_direct}
+\boxed{\bx_t = \sqrt{\bar\alpha_t}\,\bx_0 + \sqrt{1-\bar\alpha_t}\,\epsilon, \quad \epsilon \sim \mathcal{N}(\mathbf{0},\mathbf{I})}
+\end{equation}
+
+\textbf{Why this is critical:} During training, we don't need to run $t$ sequential steps. We sample $t \sim \text{Uniform}\{1,\ldots,T\}$, then compute $\bx_t$ directly from $\bx_0$ using the formula above. This is O(1) per training sample regardless of $T$.
+
+\subsubsection{Signal-to-Noise Ratio}\index{Diffusion!SNR}
+$$\text{SNR}(t) = \frac{\bar\alpha_t}{1-\bar\alpha_t}$$
+\begin{itemize}
+\item $t = 0$: $\bar\alpha_0 = 1$, SNR $= \infty$. Pure signal, no noise.
+\item $t = T$: $\bar\alpha_T \approx 0$, SNR $\approx 0$. Pure noise, no signal.
+\item $t$ increases: SNR monotonically decreases (signal decays, noise grows).
+\item \textbf{In log-SNR}: Linear schedule gives log-SNR that decreases almost linearly. Cosine gives more gradual decrease in early steps (more signal preserved longer).
+\end{itemize}
+
+\subsection{Reverse Process (Denoising Process)}\index{Diffusion!Reverse Process}
+The true reverse: $q(\bx_{t-1}|\bx_t)$ requires knowing entire data distribution — intractable.
+
+\textbf{Key theoretical result}: When $\beta_t$ is small, $q(\bx_{t-1}|\bx_t)$ is approximately Gaussian. So we can parameterize:
+\begin{equation}\label{eq:reverse}
+p_\theta(\bx_{t-1}|\bx_t) = \mathcal{N}(\bx_{t-1}; \bmu_\theta(\bx_t, t), \sigma_t^2\mathbf{I})
+\end{equation}
+
+\subsubsection{True Posterior with $\bx_0$ Known}\index{Diffusion!Posterior}
+Using Bayes' rule, the \textbf{tractable posterior} is:
+\begin{equation}
+q(\bx_{t-1}|\bx_t, \bx_0) = \mathcal{N}(\bx_{t-1}; \tilde\bmu_t(\bx_t, \bx_0), \tilde\beta_t\mathbf{I})
+\end{equation}
+where:
+\begin{align}
+\tilde\bmu_t &= \frac{\sqrt{\bar\alpha_{t-1}}\beta_t}{1-\bar\alpha_t}\bx_0 + \frac{\sqrt{\alpha_t}(1-\bar\alpha_{t-1})}{1-\bar\alpha_t}\bx_t \label{eq:posterior_mean}\\
+\tilde\beta_t &= \frac{(1-\bar\alpha_{t-1})\beta_t}{1-\bar\alpha_t} \label{eq:posterior_var}
+\end{align}
+
+\begin{keybox}[Posterior Mean — Why Two Terms?]
+$\tilde\bmu_t = \underbrace{\frac{\sqrt{\bar\alpha_{t-1}}\beta_t}{1-\bar\alpha_t}\bx_0}_{\text{toward clean data}} + \underbrace{\frac{\sqrt{\alpha_t}(1-\bar\alpha_{t-1})}{1-\bar\alpha_t}\bx_t}_{\text{from noisy input}}$
+
+\begin{itemize}
+\item \textbf{First term}: Pulls $\bx_{t-1}$ toward the clean data $\bx_0$ (weighted by signal strength).
+\item \textbf{Second term}: Keeps $\bx_{t-1}$ close to the current noisy $\bx_t$ (inertia).
+\item \textbf{Early steps} (large $t$): mostly noise $\Rightarrow$ first term dominates (strong pull toward $\bx_0$).
+\item \textbf{Late steps} (small $t$): mostly signal $\Rightarrow$ second term dominates (small refinement).
+\item Both terms together define a \textbf{weighted average} of $\bx_0$ and $\bx_t$, with weights determined by the noise schedule.
+\end{itemize}
+\end{keybox}
+
+\subsubsection{Reparameterizing with $\epsilon$-prediction}\index{Diffusion!Epsilon Prediction}
+Since $\bx_0 = \frac{\bx_t - \sqrt{1-\bar\alpha_t}\epsilon}{\sqrt{\bar\alpha_t}}$, substitute into Eq.~\ref{eq:posterior_mean}:
+\begin{equation}\label{eq:mu_epsilon}
+\boxed{\bmu_\theta(\bx_t, t) = \frac{1}{\sqrt{\alpha_t}}\left(\bx_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\epsilon_\theta(\bx_t, t)\right)}
+\end{equation}
+
+\begin{keybox}[Why Predict Noise ($\epsilon$) Instead of Mean or $\bx_0$?]
+\textbf{Three parameterization choices:}
+\begin{enumerate}
+\item \textbf{Predict $\bmu_\theta$}: The original formulation. Network directly outputs the denoised mean.
+\item \textbf{Predict $\bx_0$}: Network predicts the clean image. Mean is computed from $\bx_0$ prediction.
+\item \textbf{Predict $\epsilon_\theta$} (DDPM choice): Network predicts the \textbf{noise that was added}.
+\end{enumerate}
+
+\textbf{Why $\epsilon$-prediction is best:}
+\begin{itemize}
+\item The noise $\epsilon$ is \textbf{always standard Gaussian} regardless of $t$. A simple, consistent target across all timesteps.
+\item Predicting $\bx_0$ at early steps (high $t$) is an extremely hard task — predicting a clean image from near-pure noise! Predicting $\epsilon$ at the same step is easier because $\epsilon$ has known structure ($\mathcal{N}(0,I)$).
+\item $\epsilon$-prediction makes the loss \textbf{uniform across timesteps}. No weighting needed.
+\item Empirically: $\epsilon$-prediction gives best FID scores and most stable training.
+\end{itemize}
+\end{keybox}
+
+\subsection{Training Objective}\index{Diffusion!Training}
+
+The variational lower bound (VLB/ELBO) decomposes into a sum of KL divergences at each timestep. After simplification:
+
+\textbf{Simplified loss (DDPM):}
+\begin{equation}\label{eq:ddpm_loss}
+\boxed{\mathcal{L}_{\text{simple}} = \E_{t, \bx_0, \epsilon}\!\left[\norm{\epsilon - \epsilon_\theta(\bx_t, t)}^2\right]}
+\end{equation}
+
+\begin{keybox}[Training Loss — Complete Explanation]
+\textbf{What the model learns}, step by step:
+\begin{enumerate}
+\item Sample clean image $\bx_0$ from dataset.
+\item Sample timestep $t \sim \text{Uniform}\{1,\ldots,T\}$.
+\item Sample noise $\epsilon \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$.
+\item Create noisy image: $\bx_t = \sqrt{\bar\alpha_t}\bx_0 + \sqrt{1-\bar\alpha_t}\epsilon$.
+\item Network predicts: $\hat\epsilon = \epsilon_\theta(\bx_t, t)$.
+\item Loss: $\|\epsilon - \hat\epsilon\|^2$. How well did it predict the noise?
+\end{enumerate}
+
+\textbf{This is just MSE on noise}! Incredibly simple. The complexity is hidden in:
+\begin{itemize}
+\item Architecture ($\epsilon_\theta$ is a U-Net with time conditioning).
+\item The closed-form sampling of $\bx_t$ enables efficient training.
+\item Uniform sampling of $t$ during training means the model learns to denoise at \emph{all noise levels}.
+\end{itemize}
+\end{keybox}
+
+\subsection{Variational Lower Bound (VLB) — Full Derivation}\index{Diffusion!VLB}
+
+The complete ELBO for diffusion models:
+\begin{align}
+\log p(\bx_0) &\geq \E_q\!\left[\log\frac{p(\bx_{0:T})}{q(\bx_{1:T}|\bx_0)}\right] \nonumber\\
+&= \E_q\!\left[-\log\frac{q(\bx_T|\bx_0)}{p(\bx_T)} - \sum_{t=2}^T\log\frac{q(\bx_{t-1}|\bx_t,\bx_0)}{p_\theta(\bx_{t-1}|\bx_t)} + \log p_\theta(\bx_0|\bx_1)\right] \nonumber\\
+&= \underbrace{-\KL(q(\bx_T|\bx_0)\|p(\bx_T))}_{L_T\text{ (no parameters)}} - \sum_{t=2}^T\underbrace{\KL(q(\bx_{t-1}|\bx_t,\bx_0)\|p_\theta(\bx_{t-1}|\bx_t))}_{L_{t-1}} + \underbrace{\E_q[\log p_\theta(\bx_0|\bx_1)]}_{L_0}
+\end{align}
+
+\textbf{$L_T$}: KL between $q(\bx_T|\bx_0) \approx \mathcal{N}(0,I)$ and $p(\bx_T) = \mathcal{N}(0,I)$. No learnable params. $\approx 0$.
+
+\textbf{$L_{t-1}$}: KL between true posterior $q(\bx_{t-1}|\bx_t,\bx_0)$ and learned reverse $p_\theta(\bx_{t-1}|\bx_t)$. Both Gaussian $\Rightarrow$ closed-form KL. This is where $\epsilon$-prediction enters.
+
+\textbf{$L_0$}: Reconstruction term at the final step.
+
+\textbf{Connection to $\mathcal{L}_{\text{simple}}$:} When using $\epsilon$-prediction and fixed variance, the KL terms $L_{t-1}$ reduce to weighted MSE: $\|\epsilon - \epsilon_\theta(\bx_t, t)\|^2$ with time-dependent weights. DDPM drops the weights (uniform sampling), giving the simple loss. This works slightly better empirically.
+
+\subsection{Sampling (Reverse Process — Inference)}\index{Diffusion!Sampling}
+
+\begin{algorithm}[H]
+\caption{DDPM Sampling}\small
+\begin{algorithmic}[1]
+\State $\bx_T \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$ \Comment{Start from pure noise}
+\For{$t = T, T{-}1, \ldots, 1$}
+    \State $\epsilon \sim \mathcal{N}(\mathbf{0},\mathbf{I})$ if $t > 1$, else $\epsilon = \mathbf{0}$
+    \State $\bx_{t-1} = \frac{1}{\sqrt{\alpha_t}}\!\left(\bx_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\epsilon_\theta(\bx_t, t)\right) + \sigma_t\epsilon$
+\EndFor
+\State \Return $\bx_0$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Why add noise during sampling?} The reverse step predicts the \emph{mean} of $p(\bx_{t-1}|\bx_t)$. But this distribution has variance $\sigma_t^2$. Adding noise $\sigma_t\epsilon$ samples from the full distribution, not just the mode. This is critical for diversity — without it, the model produces overly smooth/averaged outputs. At the final step ($t=1$), we want a clean image, so $\epsilon = 0$.
+
+\subsection{DDIM: Fast Deterministic Sampling}\index{DDIM}\index{Diffusion!DDIM}
+
+\textbf{Problem}: DDPM needs 1000 steps. Each step requires a full U-Net forward pass. For $512^2$ images: $\sim$30 seconds on A100.
+
+\textbf{DDIM} (Song et al., 2020): Defines a non-Markovian reverse process that maps $\bx_t \to \bx_{t-1}$ \textbf{deterministically} (or with tunable stochasticity $\eta$):
+
+\begin{equation}\label{eq:ddim}
+\boxed{\bx_{t-1} = \sqrt{\bar\alpha_{t-1}}\underbrace{\left(\frac{\bx_t - \sqrt{1-\bar\alpha_t}\epsilon_\theta(\bx_t,t)}{\sqrt{\bar\alpha_t}}\right)}_{\text{predicted }\hat\bx_0} + \underbrace{\sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\epsilon_\theta(\bx_t,t)}_{\text{direction pointing to } \bx_t} + \underbrace{\sigma_t\epsilon_t}_{\text{random noise}}}
+\end{equation}
+
+\begin{keybox}[DDIM Key Properties]
+\begin{itemize}
+\item \textbf{$\eta = 0$ (deterministic)}: $\sigma_t = 0$. Same noise $\bx_T$ always produces the same $\bx_0$. This enables: latent interpolation, consistent reconstruction, inversion.
+\item \textbf{$\eta = 1$}: Reduces to DDPM (stochastic). Full diversity.
+\item \textbf{Fewer steps}: Because DDIM is deterministic, it's a smooth trajectory in latent space. Can skip steps! Use $S \ll T$ steps (e.g., $S = 50$ instead of $T = 1000$). Quality degrades gracefully.
+\item \textbf{Speed comparison}: DDPM@1000 steps: 30s. DDIM@50 steps: 1.5s. DDIM@10 steps: 0.3s (some quality loss).
+\end{itemize}
+\end{keybox}
+
+\subsection{Classifier-Free Guidance}\index{Classifier-Free Guidance}\index{CFG}
+
+\textbf{Goal}: Generate images that strongly follow the text prompt.
+
+\textbf{Method}: Train the model with and without conditioning. During sampling, amplify the conditional signal:
+\begin{equation}\label{eq:cfg}
+\boxed{\hat\epsilon = \epsilon_\theta(\bx_t, t, \emptyset) + w\!\left(\epsilon_\theta(\bx_t, t, \mathbf{c}) - \epsilon_\theta(\bx_t, t, \emptyset)\right)}
+\end{equation}
+
+\begin{keybox}[Classifier-Free Guidance — Decomposition]
+\begin{itemize}
+\item $\epsilon_\theta(\bx_t, t, \emptyset)$: \textbf{Unconditional} noise prediction. ``What noise is in this image?'' (no text influence).
+\item $\epsilon_\theta(\bx_t, t, \mathbf{c})$: \textbf{Conditional} prediction. ``What noise is in this image, given the text describes a red car?''
+\item \textbf{Difference}: $\Delta = \epsilon_{cond} - \epsilon_{uncond}$. This vector represents the \textbf{direction in noise space} that the text condition pushes the denoising toward.
+\item $w > 1$: \textbf{Amplify} the text direction. $w = 1$ is standard. $w = 7.5$ (typical for Stable Diffusion): moves 7.5$\times$ more in the text-directed direction.
+\item \textbf{Trade-off}: $w \uparrow$ $\Rightarrow$ better text-image alignment but less diversity. $w \downarrow$ $\Rightarrow$ more diversity but weaker prompt following.
+\item \textbf{Each sampling step requires 2 forward passes}. Can batch them for compute efficiency.
+\item \textbf{Training}: 10\% of training examples use $\mathbf{c} = \emptyset$ (random dropout). This teaches the model both conditional and unconditional generation.
+\end{itemize}
+\end{keybox}
+
+\subsection{Score-Based Perspective}\index{Score Matching}\index{Score Function}
+An alternative (equivalent) viewpoint: $\epsilon_\theta(\bx_t, t) \approx -\sqrt{1-\bar\alpha_t}\nabla_{\bx_t}\log p_t(\bx_t)$.
+
+The score function $\nabla_\bx \log p(\bx)$ points toward regions of higher data density. Denoising = following the score = moving toward data. This connects diffusion to Langevin dynamics and energy-based models.
+
+\subsection{Latent Diffusion Summary Pipeline}\index{Latent Diffusion!Pipeline}
+\textbf{Stable Diffusion complete pipeline:}
+\begin{enumerate}
+\item \textbf{Text} $\to$ CLIP Text Encoder $\to$ token embeddings $\mathbf{c} \in \R^{77 \times 768}$.
+\item Sample $\bz_T \sim \mathcal{N}(0,I)$ in latent space $\R^{64 \times 64 \times 4}$.
+\item For $t = T, \ldots, 1$: $\bz_{t-1} = \text{Denoise}(\bz_t, t, \mathbf{c})$ via U-Net + CFG.
+\item $\bx_0 = \text{VAE-Decoder}(\bz_0)$: latent $\to$ $512 \times 512$ pixel image.
+\end{enumerate}
+
+\subsection{Diffusion vs Other Generative Models}\index{Diffusion!Comparison}
+\begin{center}\small
+\begin{tabular}{lcccc}\toprule
+& \textbf{Diffusion} & \textbf{GAN} & \textbf{VAE} & \textbf{Flow} \\\midrule
+Quality (FID) & \textbf{Best} & Good & Moderate & Good \\
+Training & Stable (MSE) & Unstable & Stable & Stable \\
+Sampling speed & Slow ($T$ steps) & \textbf{Fast (1 step)} & Fast (1) & Fast (1) \\
+Mode coverage & \textbf{Excellent} & Poor (collapse) & Good & Good \\
+Density & VLB & No & ELBO & Exact \\
+Controllability & \textbf{Best} (CFG) & Limited & Moderate & Moderate \\
+Architecture & U-Net/DiT & Gen+Disc & Enc+Dec & Invertible \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Exam Questions — Diffusion (Expanded)}\index{Diffusion!Exam Questions}
+
+\begin{examq}[Q1: Full Forward Pass Computation]
+\textbf{Given $\bx_0 = [0.5, 0.8, 0.3]$, $T = 3$, $\beta_1 = 0.1$, $\beta_2 = 0.2$, $\beta_3 = 0.3$, $\epsilon = [0.1, -0.2, 0.5]$. Compute $\bx_3$ using the closed-form formula.}
+
+\textbf{Answer:}
+$\alpha_1 = 0.9, \alpha_2 = 0.8, \alpha_3 = 0.7$.\\
+$\bar\alpha_3 = 0.9 \times 0.8 \times 0.7 = 0.504$.\\
+$\sqrt{\bar\alpha_3} = \sqrt{0.504} = 0.710$.\\
+$\sqrt{1-\bar\alpha_3} = \sqrt{0.496} = 0.704$.\\
+$\bx_3 = 0.710 \times [0.5, 0.8, 0.3] + 0.704 \times [0.1, -0.2, 0.5]$\\
+$= [0.355, 0.568, 0.213] + [0.070, -0.141, 0.352]$\\
+$= \boxed{[0.425, 0.427, 0.565]}$\\
+\textbf{Verification}: $\bx_3$ is much noisier than $\bx_0$. Mean magnitude reduced (signal scaled by 0.71). Noise added. At $T = 3$, $\bar\alpha_3 = 0.504$, so still about half signal/half noise. For $T = 1000$, $\bar\alpha_T \approx 0$, and $\bx_T \approx$ pure noise.
+\end{examq}
+
+\begin{examq}[Q2: Why Predict Noise?]
+\textbf{Explain three reasons why DDPM predicts $\epsilon$ instead of predicting $\bx_0$ directly.}
+
+\textbf{Answer:} (1) \textbf{Consistent target}: $\epsilon \sim \mathcal{N}(0,I)$ always, regardless of $t$ or $\bx_0$. Predicting $\bx_0$ from $\bx_T$ (pure noise) is enormously harder than predicting $\bx_0$ from $\bx_1$ ($\sim$clean) — inconsistent difficulty across $t$. (2) \textbf{Simplified loss}: $\epsilon$-prediction leads to uniform-weight MSE $\|\epsilon - \epsilon_\theta\|^2$ that empirically gives best FID. $\bx_0$-prediction requires reweighting across timesteps. (3) \textbf{Connection to score}: $\epsilon_\theta(\bx_t,t) \approx -\sqrt{1-\bar\alpha_t}\nabla_{\bx_t}\log p(\bx_t)$. Predicting noise = estimating the score function, which is the theoretically grounded approach to generative modeling via Langevin dynamics.
+\end{examq}
+
+\begin{examq}[Q3: Scenario — DDIM vs DDPM]
+\textbf{For an art-generation app needing real-time performance ($<$2 seconds), recommend DDIM or DDPM. Defend with math.}
+
+\textbf{Answer:} \textbf{Use DDIM.} DDPM at $T = 1000$ steps with 50ms/step $= 50$s (too slow). DDIM allows subsampling: use $S = 25$ equally spaced steps from $\{1, \ldots, 1000\}$. Time: $25 \times 50$ms $= 1.25$s ($< 2$s). At $\eta = 0$: deterministic, reproducible. Quality: FID degrades from $\sim$3.2 (1000 steps) to $\sim$4.5 (25 steps) — acceptable for interactive use. Further: use \textbf{latent diffusion} (Stable Diffusion) to denoise in $64^2$ latent space instead of $512^2$ pixel space, reducing U-Net cost by $\sim$4$\times$. With both: $25 \times 12$ms $\approx 0.3$s.
+\end{examq}
+
+\begin{examq}[Q4: CFG Analysis]
+\textbf{In classifier-free guidance with $w = 7.5$: (a) How many U-Net evaluations per sampling step? (b) What happens at $w = 1$ vs $w = 20$? (c) Why does CFG require training-time dropout of conditioning?}
+
+\textbf{Answer:} (a) \textbf{Two} evaluations: $\epsilon_\theta(\bx_t, t, \emptyset)$ and $\epsilon_\theta(\bx_t, t, \mathbf{c})$. Both use the \textit{same} U-Net, just different conditioning input. (b) $w = 1$: Standard conditional generation. \textbf{Balanced} quality/diversity. $w = 20$: Extremely strong guidance. Images exactly match prompt but look ``over-processed'' — saturated colors, exaggerated features, low diversity. All outputs for ``a cat'' look nearly identical. (c) The model must learn $p(\bx_t|t)$ (unconditional) in addition to $p(\bx_t|t, \mathbf{c})$ (conditional). If never trained without conditioning, $\epsilon_\theta(\bx_t, t, \emptyset)$ produces garbage $\Rightarrow$ the difference $\epsilon_{cond} - \epsilon_{uncond}$ is meaningless. Randomly dropping $\mathbf{c}$ during training teaches both modes simultaneously.
+\end{examq}
+
+\begin{examq}[Q5: Signal-to-Noise Analysis]
+\textbf{Show that $\bar\alpha_T \approx 0$ for DDPM with $\beta_t$ linearly from $10^{-4}$ to $0.02$ over $T = 1000$.}
+
+\textbf{Answer:}
+$\bar\alpha_T = \prod_{t=1}^{1000}(1-\beta_t)$. Taking log: $\log\bar\alpha_T = \sum_{t=1}^{1000}\log(1-\beta_t) \approx -\sum_{t=1}^{1000}\beta_t$ (for small $\beta_t$).
+$\sum \beta_t \approx \frac{1000}{2}(\beta_1 + \beta_T) = 500 \times (10^{-4} + 0.02) = 500 \times 0.0201 = 10.05$.
+$\bar\alpha_T \approx e^{-10.05} \approx 4.3 \times 10^{-5} \approx 0$. $\checkmark$
+So $\text{SNR}(T) = \bar\alpha_T / (1-\bar\alpha_T) \approx 0$: pure noise at step $T$.
+\end{examq}
+
+\begin{examq}[Q6: Misconception — Diffusion Is Slow]
+\textbf{``Diffusion models are always 1000$\times$ slower than GANs.'' Evaluate this claim.}
+
+\textbf{Answer:} \textbf{Partially correct, but addressable:} (1) DDPM at 1000 steps is $\sim$1000$\times$ slower than GAN (which needs 1 pass). (2) Modern techniques: DDIM (50 steps, 20$\times$), DPM-Solver++ (10-20 steps), consistency models (1-2 steps), progressive distillation (4-8 steps). (3) Latent diffusion: $48\times$ smaller spatial dimensions. (4) \textbf{Consistency Models} (Song, 2023): Train to map directly from noise to data in \textbf{1 step}. Approach GAN speed while maintaining diffusion quality. (5) \textbf{SDXL Turbo}: 1-step generation via adversarial distillation. Nearly real-time. So the claim is outdated — modern diffusion models can be $\sim$5-10$\times$ slower than GANs (not 1000$\times$), with comparable quality.
+\end{examq}

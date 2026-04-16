@@ -1,0 +1,341 @@
+% =============================================================================
+% CHAPTER 1: VISION TRANSFORMER (ViT) — EXPANDED
+% Paper: "An Image is Worth 16x16 Words" (Dosovitskiy et al., ICLR 2021)
+% =============================================================================
+\section{Vision Transformer (ViT)}\index{Vision Transformer}\index{ViT}
+
+\subsection{Motivation \& Historical Context}
+\textbf{Before ViT}: CNNs dominated vision (AlexNet 2012 $\to$ VGG $\to$ ResNet $\to$ EfficientNet). All used convolutional layers with local receptive fields.
+
+\textbf{Problem with CNNs:}
+\begin{itemize}
+\item \textbf{Limited receptive field}: A $3{\times}3$ conv sees only $3{\times}3$ pixels. Global context requires stacking many layers. ResNet-50 needs 50 layers for large receptive field.
+\item \textbf{Translation equivariance is hard-coded}: Good for some tasks, but prevents learning other spatial relationships.
+\item \textbf{Scaling bottleneck}: Performance gains saturate with more parameters/compute.
+\end{itemize}
+
+\textbf{Transformers in NLP:} Self-attention captures long-range dependencies in one layer. BERT/GPT showed transformers scale better with data and compute. \textbf{Key Question:} Can we apply the \emph{same} architecture to vision?
+
+\textbf{Prior attempts:} Some works added self-attention to CNNs (SAGAN, Non-local Neural Networks). ViT is the first \textbf{pure} transformer for vision with \textbf{no convolutions at all}.
+
+\begin{definition}[Vision Transformer]
+A model that applies the standard Transformer encoder \emph{directly} to sequences of image patches, with minimal image-specific modifications. No convolutions, no pooling — pure attention.
+\end{definition}
+
+\subsection{Architecture — Complete Step-by-Step}\index{ViT!Architecture}
+
+\subsubsection{Step 1: Patch Extraction \& Embedding}\index{Patch Embedding}
+Given image $\bx \in \R^{H \times W \times C}$, divide into a grid of $N$ non-overlapping patches, each of size $P \times P$:
+$$N = \frac{H \times W}{P^2}$$
+Each patch $\bx_p^i \in \R^{P \times P \times C}$ is \textbf{flattened} to a vector $\bx_p^i \in \R^{P^2 \cdot C}$, then linearly projected:
+\begin{equation}\label{eq:patch_embed}
+\boxed{\mathbf{z}_0^i = \bx_p^i \mathbf{E} + \mathbf{e}_{pos}^i, \quad \mathbf{E} \in \R^{(P^2C) \times D}}
+\end{equation}
+
+\begin{keybox}[Why Linear Projection (Not Convolution)?]
+\begin{itemize}
+\item Mathematically equivalent to a $\text{Conv2D}(C_{in}{=}3, C_{out}{=}D, \text{kernel}{=}P, \text{stride}{=}P)$.
+\item Conceptually, treats each patch as a ``word'' and $\mathbf{E}$ as an ``embedding matrix.''
+\item The projection learns what features to extract from raw pixels — could be edges, colors, textures.
+\item \textbf{After training}, visualizing $\mathbf{E}$'s columns reveals learned Gabor-like filters (similar to CNN first-layer filters!). The model \emph{rediscovers} convolutional features from data.
+\end{itemize}
+\end{keybox}
+
+\textbf{Numerical Example:} For $224 \times 224 \times 3$ image, $P{=}16$:
+$N = 224^2/16^2 = 196$ patches. Each patch: $16^2 \times 3 = 768$ dims. Projection: $\R^{768 \times 768}$ (for ViT-Base with $D{=}768$). This is $768 \times 768 = 589,824$ parameters.
+
+\subsubsection{Step 2: Positional Embeddings}\index{Positional Embedding}\index{ViT!Positional Embedding}
+Transformers are \textbf{permutation-invariant} (unlike CNNs). Without positional info, the model cannot distinguish ``patch at top-left'' from ``patch at bottom-right.''
+
+\textbf{Solution:} Add \textbf{learnable 1D position embeddings} $\mathbf{e}_{pos} \in \R^{(N+1) \times D}$:
+$$\mathbf{z}_0 = [\mathbf{x}_{class};\; \bx_p^1\mathbf{E};\; \ldots;\; \bx_p^N\mathbf{E}] + \mathbf{e}_{pos}$$
+
+\begin{keybox}[Position Embedding — Deep Dive]
+\begin{itemize}
+\item \textbf{1D vs 2D vs Relative}: Paper tested all three — \textbf{no significant difference} ($<$0.1\% accuracy). 1D is simplest.
+\item \textbf{Why 1D works for 2D images}: The model \emph{learns} 2D spatial structure. Visualizing the learned position embeddings shows: (a) nearby patches have high cosine similarity, (b) same-row and same-column patches cluster together, (c) the embedding recovers a 2D grid structure automatically.
+\item \textbf{Fixed (sinusoidal) vs Learned}: Learned embeddings work better for ViT. Unlike NLP where sequences vary in length, images have fixed patch count during training.
+\item \textbf{Parameters}: $(N+1) \times D = 197 \times 768 = 151,296$ parameters (small).
+\item \textbf{Fine-tuning at different resolution}: If training at $224^2$ ($N{=}196$) but fine-tuning at $384^2$ ($N{=}576$), the 196 position embeddings must be \textbf{2D-bicubic interpolated} to 576. This works because the learned embeddings capture smooth spatial functions.
+\end{itemize}
+\end{keybox}
+
+\subsubsection{Step 3: [CLS] Token}\index{CLS Token}
+A learnable vector $\mathbf{x}_{class} \in \R^D$ is prepended to the sequence. After $L$ transformer layers, its output $\mathbf{z}_L^0$ serves as the \textbf{global image representation}.
+
+\textbf{How [CLS] works mechanistically:}
+\begin{enumerate}
+\item Layer 1: [CLS] attends to all patches, computing a weighted sum.
+\item Layers 2--$L$: [CLS] iteratively refines, incorporating multi-hop relationships.
+\item Final layer: [CLS] has aggregated information from \textbf{all} patches through $L$ rounds of attention.
+\end{enumerate}
+
+\textbf{CLS vs Global Average Pooling (GAP):}
+\begin{itemize}
+\item \textbf{CLS}: Learns to \emph{selectively} aggregate (attention-weighted). Can focus on important patches.
+\item \textbf{GAP}: Equally weights all patches (democratic). Simpler but less flexible.
+\item Paper uses CLS by default. DeiT shows GAP works similarly with proper training.
+\end{itemize}
+
+\subsubsection{Step 4: Transformer Encoder}\index{ViT!Encoder}
+Stack of $L$ identical layers. Each layer has two sub-layers:
+\begin{align}
+\mathbf{z}'_\ell &= \text{MSA}(\text{LN}(\mathbf{z}_{\ell-1})) + \mathbf{z}_{\ell-1} \quad \text{(Self-Attention + Residual)} \label{eq:vit_msa}\\
+\mathbf{z}_\ell &= \text{MLP}(\text{LN}(\mathbf{z}'_\ell)) + \mathbf{z}'_\ell \quad \text{(Feed-Forward + Residual)} \label{eq:vit_mlp}
+\end{align}
+
+\begin{keybox}[Pre-Norm vs Post-Norm: Critical Distinction]
+\textbf{Original Transformer (Post-Norm):}
+$\mathbf{z}' = \text{LN}(\text{MSA}(\mathbf{z}) + \mathbf{z})$ — LayerNorm \emph{after} residual addition.
+
+\textbf{ViT (Pre-Norm):}
+$\mathbf{z}' = \text{MSA}(\text{LN}(\mathbf{z})) + \mathbf{z}$ — LayerNorm \emph{before} sub-layer.
+
+\textbf{Why Pre-Norm?}
+\begin{itemize}
+\item The residual path is ``clean'' (identity function). Gradients flow directly through $L$ layers without normalization barriers.
+\item Training is more stable for deep networks ($L \geq 12$).
+\item Eliminates need for careful learning rate warmup.
+\item Empirically: Pre-Norm trains 1.5-2$\times$ faster and is standard in modern transformers.
+\end{itemize}
+\end{keybox}
+
+\subsubsection{Step 5: Multi-Head Self-Attention (MSA) — Full Derivation}\index{Self-Attention}\index{MSA}
+
+Given input $\mathbf{Z} \in \R^{N \times D}$, compute Query, Key, Value for each head $h$:
+$$\mathbf{Q}_h = \mathbf{Z}\mathbf{W}_Q^h, \quad \mathbf{K}_h = \mathbf{Z}\mathbf{W}_K^h, \quad \mathbf{V}_h = \mathbf{Z}\mathbf{W}_V^h$$
+where $\mathbf{W}_Q^h, \mathbf{W}_K^h, \mathbf{W}_V^h \in \R^{D \times d_k}$, $d_k = D/h$.
+
+\textbf{Scaled Dot-Product Attention:}
+\begin{equation}\label{eq:attention}
+\boxed{\text{Attention}(\mathbf{Q},\mathbf{K},\mathbf{V}) = \softmax\!\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d_k}}\right)\mathbf{V}}
+\end{equation}
+
+\begin{keybox}[Complete Formula Breakdown: Scaled Dot-Product Attention]
+\textbf{1. $\mathbf{Q}\mathbf{K}^\top \in \R^{N \times N}$}: Attention score matrix. Entry $(i,j)$ measures how much token $i$ should ``pay attention to'' token $j$. Computed as dot product of query $i$ with key $j$.
+
+\textbf{2. Scaling by $1/\sqrt{d_k}$}: 
+\begin{itemize}
+\item If $q_m, k_m \sim \mathcal{N}(0,1)$ independently, then $\mathbf{q}^\top\mathbf{k} = \sum_{m=1}^{d_k} q_m k_m$.
+\item $\E[\mathbf{q}^\top\mathbf{k}] = 0$, $\text{Var}[\mathbf{q}^\top\mathbf{k}] = d_k$.
+\item For large $d_k$ (e.g., 64), some dot products become $\approx \pm 8$, pushing softmax into extreme regions.
+\item In extreme regions: $\frac{\partial \softmax}{\partial z} \approx 0$ $\Rightarrow$ \textbf{vanishing gradients}.
+\item Dividing by $\sqrt{d_k}$ normalizes variance to 1, keeping softmax in the ``useful'' gradient region.
+\end{itemize}
+
+\textbf{3. $\softmax(\cdot)$}: Applied row-wise. Converts scores to probability distribution: $\sum_j \alpha_{ij} = 1$, $\alpha_{ij} \geq 0$. Each row gives the ``attention distribution'' for one query token.
+
+\textbf{4. $\times \mathbf{V}$}: Weighted sum of value vectors. Output token $i = \sum_j \alpha_{ij} \mathbf{v}_j$. Each output is a \textbf{soft selection/averaging} of all input values weighted by relevance.
+\end{keybox}
+
+\textbf{Multi-Head Attention:}
+$$\text{MSA}(\mathbf{Z}) = [\text{head}_1;\;\text{head}_2;\;\ldots;\;\text{head}_h]\mathbf{W}_O, \quad \mathbf{W}_O \in \R^{D \times D}$$
+Each head operates on $d_k{=}D/h$ dimensions. Concatenation restores dimension $D$.
+
+\textbf{Why Multiple Heads?}
+\begin{itemize}
+\item Each head learns \textbf{different attention patterns}: some attend to nearby patches (local texture), others to distant patches (global structure), others to same-color regions, etc.
+\item Empirically verified by visualizing attention maps: heads specialize!
+\item Equivalent interpretation: multi-head attention is a set of parallel low-rank attention operations, more expressive than single high-rank attention.
+\end{itemize}
+
+\textbf{Parameter Count for MSA:}
+$4 \times D \times D$ (for $W_Q, W_K, W_V, W_O$) $+ 4D$ (biases) $= 4D^2 + 4D$.
+For ViT-Base ($D{=}768$): $4 \times 768^2 \approx 2.36M$ per MSA layer.
+
+\subsubsection{Step 6: MLP (Feed-Forward Network)}\index{MLP}\index{FFN}
+$$\text{MLP}(\mathbf{z}) = \text{GELU}(\mathbf{z}\mathbf{W}_1 + \mathbf{b}_1)\mathbf{W}_2 + \mathbf{b}_2$$
+where $\mathbf{W}_1 \in \R^{D \times 4D}$, $\mathbf{W}_2 \in \R^{4D \times D}$.
+
+\textbf{GELU activation:} $\text{GELU}(x) = x \cdot \Phi(x) \approx 0.5x(1 + \tanh[\sqrt{2/\pi}(x + 0.044715x^3)])$
+
+\textbf{Why GELU not ReLU?}
+\begin{itemize}
+\item GELU is smooth (differentiable everywhere), ReLU has a kink at 0.
+\item GELU provides stochastic regularization (output $\approx$ xBernoulli(x)).
+\item Better gradient flow through negative inputs (ReLU kills negatives entirely).
+\end{itemize}
+
+\textbf{Why expansion ratio 4$\times$?}
+The bottleneck structure $D \to 4D \to D$ lets the MLP learn complex non-linear transformations in a higher-dimensional space before projecting back. This is analogous to the ``wider is better'' principle in neural networks.
+
+\textbf{Role of FFN in Transformers (exam-critical):}
+\begin{itemize}
+\item Self-attention is essentially a weighted averaging operation — it can \textbf{mix} information across tokens but the per-token transformation is limited.
+\item FFN provides \textbf{per-token non-linear feature transformation}. Without it, the transformer would be a series of linear operations + softmax.
+\item Think of attention as ``\textit{which} information to use'' and FFN as ``\textit{how} to transform that information.''
+\item \textbf{From the Mid-1 exam}: Removing FFN from a legal text generator significantly reduced ability to generate complex phrasing — FFN adds the representational power for complex transformations.
+\end{itemize}
+
+\textbf{Parameter Count for MLP:}
+$D \times 4D + 4D + 4D \times D + D = 8D^2 + 5D$. For $D{=}768$: $\approx 4.72M$ per MLP. \textbf{MLP has $\sim$2$\times$ more parameters than MSA!}
+
+\subsubsection{Step 7: Classification Head}
+$$\hat{y} = \text{Linear}(\text{LN}(\mathbf{z}_L^0))$$
+During pre-training: MLP with one hidden layer + tanh. During fine-tuning: single linear layer.
+
+\subsection{Complete Parameter Count}\index{ViT!Parameter Count}
+\begin{center}\small
+\begin{tabular}{lccccc}\toprule
+\textbf{Model} & \textbf{$L$} & \textbf{$D$} & \textbf{$h$} & \textbf{MLP} & \textbf{Params} \\\midrule
+ViT-Small & 12 & 384 & 6 & 1536 & 22M \\
+ViT-Base & 12 & 768 & 12 & 3072 & 86M \\
+ViT-Large & 24 & 1024 & 16 & 4096 & 307M \\
+ViT-Huge & 32 & 1280 & 16 & 5120 & 632M \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Computational Complexity Analysis}\index{ViT!Complexity}
+
+\textbf{Self-Attention:} $O(N^2 D)$ — quadratic in sequence length.\\
+\textbf{MLP:} $O(N \cdot 4D^2) = O(4ND^2)$ — linear in sequence length.\\
+\textbf{Total per layer:} $O(N^2D + ND^2)$.
+
+\textbf{When does attention dominate?} When $N > 4D$. For ViT-Base: $N{=}196$, $4D{=}3072$. Since $196 < 3072$, the \textbf{MLP dominates compute}. Attention dominates only for very large images or small patch sizes.
+
+\textbf{Memory for attention:} Must store $N \times N$ attention matrix. For $N{=}196$: $196^2 \times \text{sizeof(float16)} = 76$KB per head. For $N{=}4096$ (high-res): $4096^2 \times 2 = 32$MB per head — this is why high-res ViT is expensive.
+
+\subsection{Training \& Data Requirements}\index{ViT!Training}
+
+\begin{warnbox}[Critical: Data vs Inductive Bias Trade-off]
+\textbf{ViT underperforms ResNet on ImageNet-1k} (1.3M images) when trained from scratch. Results:
+\begin{itemize}
+\item ImageNet-1k: ViT-Base $<$ ResNet-50 (2\% gap).
+\item ImageNet-21k (14M): ViT-Base $\approx$ ResNet-50.
+\item JFT-300M: ViT-Large $\gg$ ResNet-152 (breakthrough).
+\end{itemize}
+\textbf{Reason:} CNNs encode locality and translation equivariance — two priors that are almost always true for natural images. ViT must \emph{learn} these from data. With enough data, learned priors $>$ hard-coded priors (more flexible).
+\end{warnbox}
+
+\textbf{Training recipe:} Adam ($\beta_1{=}0.9, \beta_2{=}0.999$), batch 4096, LR warmup (10k steps) + cosine decay, weight decay 0.1, dropout 0.1, label smoothing 0.1.
+
+\textbf{Data augmentation is critical for smaller datasets:} RandAugment, Mixup, CutMix, random erasing. Without strong augmentation, ViT-Base on ImageNet-1k drops by $\sim$5\%.
+
+\subsection{Data-Efficient Image Transformers (DeiT)}\index{DeiT}
+
+\textbf{Problem:} Not everyone has JFT-300M. Can ViT work with only ImageNet-1k?
+
+\textbf{DeiT Solution:} Knowledge distillation from a CNN teacher (RegNet) + strong data augmentation:
+\begin{enumerate}
+\item Add a \textbf{distillation token} alongside CLS token.
+\item Distillation token is trained to match the hard labels from the CNN teacher.
+\item \textbf{Hard distillation}: student mimics teacher's argmax. Better than soft distillation.
+\end{enumerate}
+
+\textbf{Result:} DeiT-Base achieves 83.1\% on ImageNet-1k (matching EfficientNet) \textbf{without external data}. This was the breakthrough that made ViT practical for everyone.
+
+\textbf{Insight for exams}: DeiT shows that the CNN's inductive bias can be \emph{transferred} to ViT via distillation, combining ViT's scalability with CNN's data efficiency.
+
+\subsection{Hierarchical Vision Transformers}\index{Swin Transformer}\index{PVT}
+
+\textbf{Problem with ViT:} Single-scale features (same resolution throughout). Bad for dense prediction (detection, segmentation) which needs multi-scale feature maps.
+
+\textbf{Swin Transformer} solution:
+\begin{itemize}
+\item \textbf{Hierarchical}: Feature maps decrease in resolution across stages ($H/4 \to H/8 \to H/16 \to H/32$), like CNN.
+\item \textbf{Windowed attention}: Compute attention within local $7 \times 7$ windows. Complexity $O(N)$ instead of $O(N^2)$.
+\item \textbf{Shifted windows}: Alternate between regular and shifted window partitions for cross-window connections.
+\item \textbf{Result}: State-of-the-art on detection and segmentation. Usable as backbone for Faster R-CNN, Mask R-CNN.
+\end{itemize}
+
+\subsection{Attention Patterns \& Interpretability}\index{ViT!Attention Patterns}
+
+\textbf{What does ViT learn?} Analysis of attention maps reveals:
+\begin{itemize}
+\item \textbf{Early layers}: Attend to \textbf{nearby patches} (local patterns — similar to CNN).
+\item \textbf{Middle layers}: Mix of local and global attention.
+\item \textbf{Late layers}: Attend to \textbf{semantically relevant} patches (object parts, even across the image).
+\item \textbf{Attention distance}: Average attention distance increases with depth (from $\sim$10 pixels in layer 1 to $\sim$100+ pixels in layer 12).
+\end{itemize}
+
+\textbf{Key insight}: ViT \emph{learns} the CNN-like locality pattern in early layers but goes beyond it in later layers. The flexibility to attend globally is what gives ViT its advantage at scale.
+
+\subsection{Information Flow: CLS Token vs Patch Tokens}\index{ViT!Information Flow}
+
+\textbf{This is critical for exam questions (see Mid-1 Q2):}
+\begin{itemize}
+\item In standard ViT (supervised), CLS token aggregates class-relevant info. Patch tokens retain spatial info but are not explicitly trained for global coherence.
+\item In MAE pre-training, patch tokens are trained to encode globally consistent information (because they must support reconstruction of missing patches). CLS token becomes less critical $\Rightarrow$ GAP works well after MAE.
+\item \textbf{Removing CLS after training}: If the model relies on CLS for classification, removing it degrades performance. If patch tokens are self-sufficient (MAE), removing CLS has minimal impact.
+\end{itemize}
+
+\subsection{When to Use / When NOT}\index{ViT!When to Use}
+
+\begin{center}\small
+\begin{tabular}{p{0.45\linewidth}p{0.45\linewidth}}\toprule
+\textbf{Use ViT When} & \textbf{Avoid ViT When} \\\midrule
+Large-scale datasets ($>$10M) & Small datasets ($<$100K) without pre-training \\
+Global context matters (scene understanding) & Strong locality prior needed \\
+Transfer learning from pre-trained model & Real-time edge deployment (use MobileNet) \\
+Scalability is important (more data = better) & Interpretability via feature maps needed \\
+Self-supervised pre-training (MAE, DINO) & Multi-scale detection (use Swin instead) \\
+Multi-modal (CLIP, BLIP) & Fixed small compute budget \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Limitations \& Solutions}\index{ViT!Limitations}
+\begin{enumerate}
+\item \textbf{Quadratic attention}: $O(N^2)$. \textit{Solutions}: Swin (windowed), Linformer (low-rank), Performer (kernel approx), FlashAttention (IO-aware).
+\item \textbf{Data hungry}: \textit{Solutions}: DeiT (distillation), MAE (self-supervised), strong augmentation.
+\item \textbf{No multi-scale features}: \textit{Solutions}: PVT, Swin (hierarchical), FPN on ViT features.
+\item \textbf{Fixed input size}: \textit{Solutions}: Interpolate position embeddings, FlexiViT (train at multiple resolutions).
+\item \textbf{Slow inference for edge}: \textit{Solutions}: EfficientViT, MobileViT, token pruning.
+\item \textbf{Lacks rotation/scale equivariance}: \textit{Solutions}: Augmentation, or specialized equivariant transformers.
+\end{enumerate}
+
+\subsection{ViT vs CNN — Extended Comparison}\index{ViT!vs CNN}
+\begin{center}\small
+\begin{tabular}{lcc}\toprule
+\textbf{Property} & \textbf{CNN} & \textbf{ViT} \\\midrule
+Inductive Bias & Strong (locality + equivariance) & Weak (learned) \\
+Receptive Field & Grows with depth & Global from layer 1 \\
+Data Efficiency & Better (few-shot OK) & Needs big data or pre-training \\
+Scaling Law & Saturates & Power-law improvement \\
+Interpretability & Feature maps (spatial) & Attention maps (which patches) \\
+Multi-scale & Natural (pooling) & Requires hierarchy (Swin) \\
+Training & Stable, well-understood & Needs careful recipe \\
+Feature Reuse & Strong (transfer learning) & Strong (MAE, CLIP) \\
+Parameterization & Local (filters) & Global (attention matrices) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Exam Questions — ViT (Expanded)}\index{ViT!Exam Questions}
+
+\begin{examq}[Q1: Mathematical — Full Computation]
+For $384 \times 384 \times 3$ image, ViT-Base ($D{=}768$, $h{=}12$, $L{=}12$, $P{=}16$): (a) \# patches, (b) flattened patch dim, (c) $\mathbf{E}$ size, (d) $d_k$ per head, (e) attention matrix size per head, (f) total params in one encoder layer, (g) total model params.
+
+\textbf{Answer:} (a) $N = 384^2/16^2 = 576$. (b) $P^2C = 768$. (c) $\R^{768 \times 768}$. (d) $d_k = 768/12 = 64$. (e) $(N{+}1)^2 = 577^2 = 332,929$. (f) MSA: $4 \times 768^2 = 2.36M$. MLP: $2 \times 768 \times 3072 = 4.72M$. LN: $4 \times 768 = 3K$. Total: $\approx 7.08M$. (g) $12 \times 7.08M + \text{embed}(768^2 + 577 \times 768) + \text{head} \approx 86M$.
+\end{examq}
+
+\begin{examq}[Q2: Conceptual — Attention Scaling]
+\textbf{Prove that if $q_m, k_m \sim \mathcal{N}(0,1)$ i.i.d., then $\text{Var}(\mathbf{q}^\top\mathbf{k}) = d_k$.}
+
+\textbf{Answer:} $\mathbf{q}^\top\mathbf{k} = \sum_{m=1}^{d_k} q_m k_m$. Since $q_m, k_m$ are independent: $\E[q_m k_m] = \E[q_m]\E[k_m] = 0$. $\text{Var}(q_m k_m) = \E[q_m^2 k_m^2] - (\E[q_m k_m])^2 = \E[q_m^2]\E[k_m^2] - 0 = 1 \cdot 1 = 1$. By independence of terms: $\text{Var}(\sum_m q_m k_m) = \sum_m \text{Var}(q_m k_m) = d_k$. \qed
+\end{examq}
+
+\begin{examq}[Q3: Scenario — Mid-Exam Style]
+\textbf{A team builds a ViT for autonomous driving. They train on 100K dashcam images and get 72\% accuracy. Training from scratch on 10M images improves to 89\%. The team leader says: ``ViT fails on small data because attention has too many parameters.'' Is this correct? Give the precise reason.}
+
+\textbf{Answer:} \textbf{Incorrect.} ViT-Base has $\sim$86M params, similar to ResNet-152 ($\sim$60M). The issue is not parameter count but \textbf{inductive bias}. CNNs encode locality (nearby pixels correlate) and translation equivariance (same filter everywhere) — priors that are almost always true for natural images. ViT has no such priors and must \emph{learn} spatial relationships from data. With 100K images, there isn't enough data to discover these patterns. With 10M, the model has sufficient examples to learn locality (verified: early-layer attention maps become local). The fix with small data is \textbf{not reducing parameters} but \textbf{transferring bias} via pre-training (MAE/DINO) or distillation (DeiT).
+\end{examq}
+
+\begin{examq}[Q4: Scenario — Information Flow]
+\textbf{In a ViT trained for satellite image classification, the CLS token achieves 91\% accuracy. Replacing CLS with global average pooling (GAP) over patch tokens drops accuracy to 85\%. A second ViT of the same architecture, pre-trained with MAE then fine-tuned, shows CLS at 93\% and GAP at 92\%. Explain this difference.}
+
+\textbf{Answer:} In the first (supervised-only) ViT, the classification objective concentrates discriminative information into the CLS token. Patch tokens optimize for feeding CLS, not for individually encoding classification-relevant features. GAP over poorly-informed patch tokens degrades accuracy. In the MAE-pretrained ViT, the reconstruction objective forces \textbf{every patch token} to learn semantically meaningful representations (each must support reconstruction of missing neighbors). Information is \textbf{distributed across all tokens} rather than concentrated in CLS. GAP over these rich patch tokens therefore retains most classification information, explaining the minimal drop (93\% $\to$ 92\%).
+\end{examq}
+
+\begin{examq}[Q5: Design — Architecture Decision]
+\textbf{You need to build an object detection system for 1024$\times$1024 images. Should you use ViT or Swin Transformer? Analyze compute, features, and accuracy.}
+
+\textbf{Answer:} \textbf{Use Swin Transformer.} (1) \textbf{Compute}: ViT with $P{=}16$ gives $N{=}4096$ patches. Attention cost: $O(4096^2 \times D) \approx 12.9\text{G}$ ops per layer. Swin with $7{\times}7$ windows: $O(49 \times 4096 \times D) \approx 154\text{M}$ — \textbf{84$\times$ faster}. (2) \textbf{Features}: Detection needs multi-scale feature maps (FPN). ViT produces single-scale features at $64{\times}64$ — must add separate FPN. Swin naturally produces $256{\times}256$, $128{\times}128$, $64{\times}64$, $32{\times}32$ features — directly compatible with FPN/Mask R-CNN. (3) \textbf{Accuracy}: Swin+Cascade Mask R-CNN achieves 58.7 box AP on COCO vs ViT-based approaches at $\sim$56 AP. Swin wins on all three criteria for detection.
+\end{examq}
+
+\begin{examq}[Q6: Misconception — Overparameterization]
+\textbf{A student claims: ``ViT has more parameters than ResNet, so it should always overfit more.'' Refute this claim with reference to modern overparameterization theory.}
+
+\textbf{Answer:} This follows classical bias-variance theory (more params $=$ more variance $=$ overfitting). However, \textbf{double descent} (Belkin et al., 2019) shows that beyond the interpolation threshold, increasing model size \emph{reduces} test error even while training error stays at zero. ViT with sufficient pre-training (MAE/JFT) enters this ``second descent'' regime where overparameterization actually helps generalization. Furthermore, the implicit regularization of SGD + weight decay in overparameterized models finds flat minima that generalize well. The key is not parameter count but the \textbf{effective complexity} of the learned function, which is controlled by training procedure, not raw parameter count.
+\end{examq}

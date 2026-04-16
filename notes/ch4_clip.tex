@@ -1,0 +1,236 @@
+% =============================================================================
+% CHAPTER 4: CONTRASTIVE LEARNING & CLIP — EXPANDED
+% =============================================================================
+\section{Contrastive Learning \& CLIP}\index{Contrastive Learning}\index{CLIP}
+
+\subsection{Contrastive Learning Foundations}\index{Contrastive Learning!Foundations}
+
+\begin{definition}[Contrastive Learning]
+A self-supervised paradigm that learns representations by \textbf{pulling together} positive pairs (different augmented views of the same sample) and \textbf{pushing apart} negative pairs (different samples) in an embedding space, without labels.
+\end{definition}
+
+\textbf{Core Principle:} Instead of predicting labels or reconstructing pixels, contrastive learning learns representations by \emph{comparison}. The key assumption: two augmented views of the same image should have \textbf{similar representations}, while views of different images should have \textbf{dissimilar representations}.
+
+\textbf{Why contrastive learning works (information theory):} Augmentations remove view-specific information (e.g., color jitter removes exact colors, crop removes position). What remains invariant across views is the \textbf{semantic content} (object identity, scene type). By maximizing agreement between views, the model learns to encode only semantics.
+
+\subsubsection{InfoNCE Loss — Complete Derivation}\index{InfoNCE}\index{Contrastive Learning!Loss}
+For a batch of $N$ images, create $2N$ augmented views. For anchor $i$ with positive $j$ (same image):
+
+\begin{equation}\label{eq:infonce}
+\boxed{\mathcal{L}_i = -\log \frac{\exp(\text{sim}(\mathbf{z}_i, \mathbf{z}_j)/\tau)}{\sum_{k=1}^{2N} \mathbb{1}_{[k \neq i]} \exp(\text{sim}(\mathbf{z}_i, \mathbf{z}_k)/\tau)}}
+\end{equation}
+
+\begin{keybox}[InfoNCE — Complete Formula Breakdown]
+\textbf{Notation:}
+\begin{itemize}
+\item $\mathbf{z}_i = g(f(\tilde{\bx}_i))$: representation after encoder $f$ and projection head $g$.
+\item $\text{sim}(\mathbf{u},\mathbf{v}) = \frac{\mathbf{u}^\top\mathbf{v}}{\|\mathbf{u}\|\|\mathbf{v}\|}$: cosine similarity $\in [-1, 1]$.
+\item $\tau > 0$: temperature parameter controlling distribution sharpness.
+\end{itemize}
+
+\textbf{Numerator:} $\exp(\text{sim}(\mathbf{z}_i, \mathbf{z}_j)/\tau)$
+\begin{itemize}
+\item Similarity between positive pair $(i,j)$ — two views of the same image.
+\item Minimizing loss $\Rightarrow$ maximizing this $\Rightarrow$ pulling positives together.
+\end{itemize}
+
+\textbf{Denominator:} $\sum_{k \neq i} \exp(\text{sim}(\mathbf{z}_i, \mathbf{z}_k)/\tau)$
+\begin{itemize}
+\item Sum over all $2N-1$ other views (1 positive + $2N-2$ negatives).
+\item Minimizing loss $\Rightarrow$ positive should dominate this sum $\Rightarrow$ negatives pushed away.
+\end{itemize}
+
+\textbf{Temperature $\tau$:}
+\begin{itemize}
+\item Small $\tau$ (e.g., 0.05): sharper distribution, focuses on hardest negatives. More discriminative but training may be unstable.
+\item Large $\tau$ (e.g., 1.0): softer distribution, all negatives equally contribute. Less discriminative.
+\item Optimal: $\tau = 0.07$ for SimCLR, $0.05$ for MoCo, \textbf{learned} for CLIP.
+\end{itemize}
+
+\textbf{Interpretation:} InfoNCE is a $(2N-1)$-way \textbf{classification problem}: classify which of the $2N-1$ candidates is the positive pair. This is equivalent to maximizing a lower bound on mutual information:
+$$I(\mathbf{z}_i; \mathbf{z}_j) \geq \log(2N-1) - \mathcal{L}_{\text{InfoNCE}}$$
+More negatives ($N$) $\Rightarrow$ tighter bound $\Rightarrow$ better representations.
+\end{keybox}
+
+\subsection{SimCLR (Chen et al., 2020)}\index{SimCLR}
+
+\textbf{Architecture:}
+\begin{enumerate}
+\item \textbf{Augment}: Apply two random augmentations $t, t' \sim \mathcal{T}$: random crop+resize, random color distortion, random Gaussian blur.
+\item \textbf{Encode}: $\mathbf{h}_i = f(\tilde{\bx}_i)$ using ResNet/ViT backbone. Output: 2048-d for ResNet-50.
+\item \textbf{Project}: $\mathbf{z}_i = g(\mathbf{h}_i)$ using 2-layer MLP (2048 $\to$ 2048 $\to$ 128). Non-linear projection.
+\item \textbf{Contrast}: Compute InfoNCE loss. Total loss = average over all $2N$ anchors.
+\end{enumerate}
+
+\textbf{Key findings from SimCLR:}
+\begin{itemize}
+\item \textbf{Composition of augmentations is critical}: Random crop alone: 63.8\%. Color jitter alone: 63.6\%. \textbf{Both together}: 70.9\%. The combination forces invariance to \emph{both} position and color.
+\item \textbf{Non-linear projection head is essential}: Linear projection: -4\%. No projection (use $\mathbf{h}$): -8\%. The projection head discards information about augmentations (color, crop position) that helps contrastive task but hurts transfer.
+\item \textbf{Downstream uses $\mathbf{h}$, not $\mathbf{z}$}: After pre-training, discard projection head. Use $\mathbf{h}$ (before projection) for downstream. $\mathbf{z}$ has discarded useful information.
+\item \textbf{Large batch sizes help}: Larger $N$ = more negatives = tighter MI bound. SimCLR uses $N{=}4096$ ($8192$ views). $N{=}256$: -5\% accuracy.
+\end{itemize}
+
+\textbf{Why does the projection head help?}
+The contrastive objective forces $\mathbf{z}$ to discard augmentation-specific information (color jitter response, crop position). But some of this information IS useful for downstream tasks (color IS relevant for flower classification). The projection head acts as an \textbf{information bottleneck}: $\mathbf{h}$ retains general features, $\mathbf{z}$ retains only invariant features. Downstream tasks get the richer $\mathbf{h}$.
+
+\subsection{MoCo (Momentum Contrast)}\index{MoCo}
+\textbf{Problem with SimCLR}: Needs huge batch (4096+). At 8192 views $\times$ 224$^2$ images, memory is prohibitive without massive GPU clusters.
+
+\textbf{MoCo's solutions:}
+\begin{enumerate}
+\item \textbf{Queue of negatives}: Maintain a FIFO queue of $K = 65536$ encoded keys (negatives). Decoupled from batch size $\Rightarrow$ can use small batches (256).
+\item \textbf{Momentum encoder}: Queue keys were encoded at different training steps $\Rightarrow$ inconsistent. Solution: update key encoder slowly.
+$$\theta_k \leftarrow m \cdot \theta_k + (1-m) \cdot \theta_q, \quad m = 0.999$$
+\end{enumerate}
+
+\begin{keybox}[Momentum Update — Why $m=0.999$?]
+\begin{itemize}
+\item $m=0$: key encoder = query encoder. Queue keys are from current encoder — maximally consistent. But no benefit over SimCLR.
+\item $m=1$: key encoder never updates. Queue keys are from a frozen model — maximally inconsistent (useless negatives).
+\item $m=0.999$: key encoder updates slowly ($\sim$1000 steps behind). Keys in the queue span $\sim$65536/256 = 256 training steps. With $m=0.999$: parameter change over 256 steps $\approx 1-(0.999)^{256} \approx 22\%$ — small enough for consistency, large enough for useful features.
+\end{itemize}
+\end{keybox}
+
+\subsection{CLIP (Contrastive Language-Image Pre-training)}\index{CLIP}
+
+\begin{definition}[CLIP (Radford et al., 2021)]
+A model that learns \textbf{aligned image-text representations} by contrastive pre-training on 400M image-text pairs from the internet, enabling \textbf{zero-shot} visual classification and cross-modal retrieval.
+\end{definition}
+
+\textbf{Key Innovation}: Instead of learning from \textbf{fixed label set} (ImageNet's 1000 classes), CLIP learns from \textbf{natural language descriptions} — infinitely expressive, open vocabulary.
+
+\subsubsection{CLIP Architecture}\index{CLIP!Architecture}
+\begin{itemize}
+\item \textbf{Image Encoder} $f_I$: ResNet-50 or ViT-L/14 (336px). Best model: ViT-L/14@336px.
+\item \textbf{Text Encoder} $f_T$: 12-layer, 512-d, 8-head Transformer. 63M params. Context length: 77 tokens. Takes BPE-tokenized text. Uses [EOS] token representation.
+\item \textbf{Shared embedding space}: Both encoders project to $d{=}512$ (or 768 for ViT-L). L2-normalized.
+\end{itemize}
+
+\subsubsection{CLIP Training Objective}\index{CLIP!Loss}
+Given batch of $N$ image-text pairs $\{(I_i, T_i)\}_{i=1}^N$:
+
+\begin{equation}\label{eq:clip_loss}
+\boxed{\mathcal{L}_{\text{CLIP}} = \frac{1}{2}\!\left(\underbrace{\mathcal{L}_{I \to T}}_{\text{image} \to \text{text}} + \underbrace{\mathcal{L}_{T \to I}}_{\text{text} \to \text{image}}\right)}
+\end{equation}
+\begin{align}
+\mathcal{L}_{I \to T} &= -\frac{1}{N}\sum_{i=1}^N \log \frac{\exp(\mathbf{I}_i^\top \mathbf{T}_i / \tau)}{\sum_{j=1}^N \exp(\mathbf{I}_i^\top \mathbf{T}_j / \tau)} \\
+\mathcal{L}_{T \to I} &= -\frac{1}{N}\sum_{j=1}^N \log \frac{\exp(\mathbf{T}_j^\top \mathbf{I}_j / \tau)}{\sum_{i=1}^N \exp(\mathbf{T}_j^\top \mathbf{I}_i / \tau)}
+\end{align}
+
+\begin{keybox}[CLIP Loss — Matrix View]
+Compute $N \times N$ similarity matrix: $S_{ij} = \mathbf{I}_i^\top \mathbf{T}_j / \tau$.
+\begin{itemize}
+\item \textbf{Diagonal entries} $(i,i)$: matching pairs (positives). Should be \textbf{high}.
+\item \textbf{Off-diagonal entries} $(i,j)$, $i \neq j$: non-matching (negatives). Should be \textbf{low}.
+\item $\mathcal{L}_{I \to T}$: cross-entropy on each \textbf{row} (for each image, find its text among $N$ candidates).
+\item $\mathcal{L}_{T \to I}$: cross-entropy on each \textbf{column} (for each text, find its image).
+\item \textbf{This is symmetric}: Both modalities must ``find'' their partner.
+\item Batch size $N = 32{,}768$ — provides 32,767 negatives per anchor.
+\item $\tau$ is \textbf{learnable}, initialized as $\tau = \exp(\log(1/0.07)) = 14.3$ (as a log-scale parameter).
+\end{itemize}
+\end{keybox}
+
+\subsubsection{CLIP Zero-Shot Classification — Step by Step}\index{CLIP!Zero-Shot}
+\begin{enumerate}
+\item \textbf{Define classes as text}: Create prompts: $\{$``a photo of a \{class\}''$\}$ for each class.
+\item \textbf{Encode text}: $\mathbf{T}_c = f_T($``a photo of a \{$c$\}''$)$ for each class $c$.
+\item \textbf{Encode image}: $\mathbf{I} = f_I(\bx)$.
+\item \textbf{Predict}: $\hat{y} = \arg\max_c \; \text{sim}(\mathbf{I}, \mathbf{T}_c) = \arg\max_c \; \mathbf{I}^\top \mathbf{T}_c$.
+\end{enumerate}
+
+\textbf{Prompt engineering:}\index{CLIP!Prompt Engineering}
+\begin{itemize}
+\item ``a photo of a dog'' $>$ ``dog'' (adds context, reduces ambiguity).
+\item ``a photo of a \{class\}, a type of pet'' (domain-specific templates).
+\item \textbf{Prompt ensembling}: Average embeddings from multiple templates (``a bright photo of a...'', ``a dark photo of a...'', etc.). Improves accuracy by 3--5\% on ImageNet.
+\item 80 templates used for ImageNet (``a bad photo of a \{class\}'', ``a sculpture of a \{class\}'', etc.).
+\end{itemize}
+
+\subsubsection{CLIP Results — Key Numbers}
+\begin{center}\small
+\begin{tabular}{lcc}\toprule
+\textbf{Benchmark} & \textbf{CLIP ViT-L/14} & \textbf{ResNet-50} \\\midrule
+ImageNet (zero-shot) & \textbf{76.2\%} & 76.1\% (supervised) \\
+ImageNet-V2 & \textbf{70.1\%} & 63.3\% \\
+ImageNet-Sketch & \textbf{60.2\%} & 24.1\% \\
+ImageNet-A & \textbf{77.2\%} & 0.0\% \\
+ImageNet-R & \textbf{88.9\%} & 58.0\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Key insight}: CLIP is dramatically more \textbf{robust} to distribution shift! It doesn't memorize ImageNet-specific features but learns general visual concepts from diverse internet data.
+
+\subsection{CLIP Applications — Comprehensive}\index{CLIP!Applications}
+\begin{enumerate}
+\item \textbf{Zero-shot classification}: Classify any category without training.
+\item \textbf{Image-text retrieval}: Given text query, find matching images (or vice versa).
+\item \textbf{Guiding generative models}: CLIP loss guides StyleGAN (StyleCLIP), diffusion (Stable Diffusion uses CLIP text encoder), DALL-E 2 (CLIP image encoder).
+\item \textbf{Open-vocabulary detection}: OWL-ViT, GLIP — detect objects described by text, beyond fixed class sets.
+\item \textbf{Visual question answering}: Use CLIP features for image understanding in VQA systems.
+\item \textbf{Image captioning}: CLIP score as reward for caption quality (CIDEr + CLIP reward).
+\item \textbf{Content moderation}: Classify images against text descriptions of harmful content.
+\item \textbf{Similarity search}: Find visually similar images, or images matching a text description.
+\item \textbf{Video understanding}: Apply CLIP to individual frames for video classification, retrieval.
+\end{enumerate}
+
+\subsection{CLIP in Stable Diffusion}\index{CLIP!in Stable Diffusion}
+\textbf{How CLIP enables text-to-image in Stable Diffusion:}
+\begin{enumerate}
+\item User provides text prompt.
+\item CLIP text encoder converts prompt to 77$\times$768 token embeddings.
+\item These embeddings are fed as \textbf{keys and values} in U-Net's \textbf{cross-attention layers}.
+\item U-Net's image features are the \textbf{queries}.
+\item Cross-attention: $\text{Attn}(Q_{img}, K_{text}, V_{text})$ — each image spatial location selectively attends to relevant text tokens.
+\item This creates spatial-semantic binding: ``cat'' in text corresponds to cat-like features in specific image locations.
+\end{enumerate}
+
+\subsection{CLIP Limitations \& Solutions}\index{CLIP!Limitations}
+\begin{enumerate}
+\item \textbf{Counting}: ``two dogs'' vs ``three dogs'' — CLIP treats it as bag-of-words. \textit{Solution}: NegCLIP, compositional benchmarks.
+\item \textbf{Bag-of-words}: ``dog bites man'' $\approx$ ``man bites dog.'' \textit{Solution}: ARO benchmark, compositional CLIP training.
+\item \textbf{Social bias}: Internet data contains biases. \textit{Solution}: Careful data curation, debiasing prompts.
+\item \textbf{Fine-grained}: Struggles with subspecies, medical imaging. \textit{Solution}: CoOp (learnable prompt tokens), CLIP-Adapter (lightweight fine-tuning).
+\item \textbf{No spatial understanding}: Global image embeddings, no localization. \textit{Solution}: LSeg, CLIPSeg for segmentation.
+\item \textbf{Not generative}: Encodes but can't generate. \textit{Solution}: Use as guidance for generators (Stable Diffusion, DALL-E).
+\end{enumerate}
+
+\subsection{Contrastive vs Generative vs Predictive SSL}\index{Self-Supervised Learning!Comparison}
+\begin{center}\small
+\begin{tabular}{lcccc}\toprule
+& \textbf{Contrastive} & \textbf{Generative} & \textbf{Predictive} & \textbf{Multi-Modal} \\
+& SimCLR, MoCo & MAE, VAE & DINO, BYOL & CLIP \\\midrule
+Pretext task & Match views & Reconstruct & Self-distill & Match modalities \\
+Negatives & Yes (many) & No & No & Yes (batch) \\
+Collapse prevention & Negatives & N/A (recon) & Stop-gradient & Negatives \\
+Batch size & Very large & Any & Medium & Very large \\
+Augmentations & Critical & Minimal (MAE) & Critical & Data diversity \\
+Best features for & Classification & Dense prediction & Both & Zero-shot \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Exam Questions — CLIP \& Contrastive (Expanded)}\index{CLIP!Exam Questions}
+
+\begin{examq}[Q1: Mathematical — Batch Size Impact]
+\textbf{In CLIP with $N{=}32768$: (a) How many total forward passes per training step? (b) Size of similarity matrix in GB (float32)? (c) How does MI bound change if $N$ is halved?}
+
+\textbf{Answer:} (a) $N$ image + $N$ text = $2 \times 32768 = 65536$ forward passes. (b) $32768 \times 32768 \times 4\text{B} = 4.29\text{GB}$. This matrix must fit in GPU memory! (c) MI bound: $I(\mathbf{z}_i;\mathbf{z}_j) \geq \log(N) - \mathcal{L}$. Halving $N$: bound decreases by $\log(32768)-\log(16384) = \log 2 \approx 0.69$ nats. Fewer negatives $\Rightarrow$ looser bound $\Rightarrow$ less informative gradients $\Rightarrow$ weaker representations.
+\end{examq}
+
+\begin{examq}[Q2: Scenario — Open Vocabulary Detection]
+\textbf{A warehouse uses fixed cameras to monitor 50 product types. New products are added monthly. Design a system that doesn't need retraining for new products.}
+
+\textbf{Answer:} \textbf{Use CLIP-based open-vocabulary detection.} (1) Deploy OWL-ViT (CLIP-backbone object detector). (2) For each product, create text descriptions: ``a box of \{product name\}'', ``\{product name\} on a shelf.'' (3) At inference, OWL-ViT compares image regions against all text descriptions. (4) \textbf{New products}: Just add text descriptions — no retraining! (5) For hard-to-describe products, use CLIP-Adapter: fine-tune with 5-10 example images + freeze CLIP backbone. This preserves zero-shot ability while adding domain specificity. (6) \textbf{Fallback}: If CLIP confidence is low, flag for human review and use the labeled example for few-shot CLIP-Adapter update.
+\end{examq}
+
+\begin{examq}[Q3: Why Learnable Temperature?]
+\textbf{Explain why CLIP uses a learnable temperature $\tau$, and what would happen with $\tau$ fixed at 1.0 vs 0.01.}
+
+\textbf{Answer:} \textbf{$\tau = 1.0$ (too warm)}: Softmax output is nearly uniform — all pairs have similar probability. Loss gradient is weak, training is slow. Model can't discriminate between hard and easy negatives. \textbf{$\tau = 0.01$ (too cold)}: Softmax is extremely peaked. Only the absolute hardest negative matters. Training is unstable — one adversarial negative dominates the gradient. Also, if two negatives have similar similarity scores differing by 0.001, the cold temperature amplifies this to $e^{0.001/0.01} \approx 1.1\times$ difference — numerically unstable. \textbf{Learnable $\tau$}: Starts warm (soft gradients, stable early training). Model learns to decrease $\tau$ as embeddings separate, enabling fine-grained discrimination later. Adapts to the embedding geometry automatically.
+\end{examq}
+
+\begin{examq}[Q4: Theoretical — Collapse Avoidance]
+\textbf{Contrastive learning without negatives risks ``representation collapse'' (all outputs become identical). Explain why this happens and how negatives prevent it.}
+
+\textbf{Answer:} \textbf{Collapse mechanism}: If loss only pulls positives together ($\min \|\mathbf{z}_i - \mathbf{z}_j\|$), the trivial solution is $f(\bx) = \mathbf{c}$ for all inputs (constant function). Loss = 0 trivially! \textbf{How negatives prevent this}: The denominator in InfoNCE includes negatives. If all representations collapse to $\mathbf{c}$, then $\text{sim}(\mathbf{z}_i, \mathbf{z}_k) = 1$ for all pairs $\Rightarrow$ denominator = $(2N{-}1)e^{1/\tau}$ $\Rightarrow$ each term contributes $-\log(1/(2N{-}1)) = \log(2N{-}1)$ $\Rightarrow$ high loss! Negatives force the model to spread representations $\Rightarrow$ non-trivial structure. \textbf{Alternatives to negatives}: BYOL uses stop-gradient + momentum encoder. DINO uses centering + sharpening. VICReg uses variance + covariance regularization.
+\end{examq}

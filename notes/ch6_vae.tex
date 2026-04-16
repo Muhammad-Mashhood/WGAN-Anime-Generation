@@ -1,0 +1,297 @@
+% =============================================================================
+% CHAPTER 6: Variational Inference, VAE, ELBO — EXPANDED
+% =============================================================================
+\section{Variational Inference, VAE \& ELBO}\index{VAE}\index{Variational Inference}\index{ELBO}
+
+\subsection{The Generative Modeling Problem}\index{Generative Modeling}
+\textbf{Goal}: Model the data distribution $p(\bx)$ so we can: (1) sample new data $\bx \sim p(\bx)$, (2) evaluate likelihood $p(\bx)$ for anomaly detection, (3) learn meaningful latent representations.
+
+\textbf{Latent Variable Models}: Assume data $\bx$ is generated from hidden latent variables $\bz$:
+$$p_\theta(\bx) = \int p_\theta(\bx|\bz)p(\bz)d\bz$$
+
+\textbf{Why latent variables?} Complex high-dimensional data (images) can be explained by lower-dimensional factors (pose, illumination, identity). $\bz$ captures these factors. $p(\bx|\bz)$ applies the decoder to generate observable data.
+
+\textbf{The Intractability Problem}:
+\begin{enumerate}
+\item \textbf{Marginal likelihood} $p(\bx) = \int p(\bx|\bz)p(\bz)d\bz$ is intractable. For neural network $p(\bx|\bz)$, no closed-form integral.
+\item \textbf{True posterior} $p(\bz|\bx) = \frac{p(\bx|\bz)p(\bz)}{p(\bx)}$ requires $p(\bx)$ in denominator — circular!
+\item \textbf{Why not Monte Carlo?} $p(\bx) \approx \frac{1}{K}\sum_{k=1}^K p(\bx|\bz_k)$ with $\bz_k \sim p(\bz)$. For high-dim $\bz$, most samples give $p(\bx|\bz_k) \approx 0$ (prior $p(\bz)$ is far from posterior). Need astronomically many samples.
+\end{enumerate}
+
+\subsection{Variational Inference (VI)}\index{Variational Inference!Theory}
+\begin{definition}[Variational Inference]
+Approximate the intractable posterior $p_\theta(\bz|\bx)$ with a \emph{tractable} parametric family $q_\phi(\bz|\bx)$, chosen to minimize the KL divergence $\KL(q_\phi(\bz|\bx) \| p_\theta(\bz|\bx))$.
+\end{definition}
+
+\textbf{Key idea}: Convert inference (integration) into optimization (gradient descent). Much faster than MCMC.
+
+\textbf{Mean-field assumption}: $q_\phi(\bz|\bx)$ is fully factorized Gaussian:
+$$q_\phi(\bz|\bx) = \prod_{j=1}^d \mathcal{N}(z_j; \mu_j(\bx), \sigma_j^2(\bx))$$
+where $\bmu(\bx)$ and $\log\bsigma^2(\bx)$ are output by a neural network (encoder).
+
+\subsection{Deriving the ELBO — Three Methods}\index{ELBO!Derivation}
+
+\subsubsection{Method 1: Jensen's Inequality}\index{Jensen's Inequality}
+\begin{align}
+\log p(\bx) &= \log \int p(\bx, \bz) d\bz = \log \int \frac{p(\bx,\bz)}{q(\bz|\bx)} q(\bz|\bx) d\bz \nonumber\\
+&= \log \E_{q(\bz|\bx)}\!\left[\frac{p(\bx,\bz)}{q(\bz|\bx)}\right] \nonumber\\
+&\geq \E_{q(\bz|\bx)}\!\left[\log\frac{p(\bx,\bz)}{q(\bz|\bx)}\right] \quad \text{(Jensen's: $\log\E[X] \geq \E[\log X]$ for concave $\log$)} \nonumber\\
+&= \text{ELBO}(\phi, \theta; \bx)
+\end{align}
+
+\subsubsection{Method 2: KL Decomposition (Most Important)}\index{ELBO!KL Decomposition}
+\begin{align}
+\log p(\bx) &= \log p(\bx) \underbrace{\int q(\bz|\bx) d\bz}_{=1} = \int q(\bz|\bx) \log p(\bx) d\bz \nonumber\\
+&= \E_q[\log p(\bx)] = \E_q\!\left[\log\frac{p(\bx,\bz)}{p(\bz|\bx)}\right] \nonumber\\
+&= \E_q\!\left[\log\frac{p(\bx,\bz) \cdot q(\bz|\bx)}{p(\bz|\bx) \cdot q(\bz|\bx)}\right] = \E_q\!\left[\log\frac{p(\bx,\bz)}{q(\bz|\bx)}\right] + \E_q\!\left[\log\frac{q(\bz|\bx)}{p(\bz|\bx)}\right] \nonumber\\
+&= \underbrace{\text{ELBO}}_{\text{computable}} + \underbrace{\KL(q(\bz|\bx)\|p(\bz|\bx))}_{\geq 0, \text{ gap}}
+\end{align}
+
+\begin{equation}\label{eq:elbo_fundamental}
+\boxed{\log p(\bx) = \text{ELBO}(\phi,\theta;\bx) + \KL(q_\phi(\bz|\bx) \| p_\theta(\bz|\bx))}
+\end{equation}
+
+Since $\KL \geq 0$: $\log p(\bx) \geq \text{ELBO}$. The ELBO is a \textbf{lower bound} on the log-evidence.
+
+\begin{keybox}[ELBO Fundamental Equation — Every Part]
+\begin{itemize}
+\item $\log p(\bx)$: \textbf{Log-evidence} (marginal log-likelihood). What we want to maximize but \textbf{cannot compute} directly.
+\item $\text{ELBO}$: Evidence Lower BOund. We \textbf{can compute} it (and its gradients). Maximizing ELBO $\approx$ maximizing $\log p(\bx)$.
+\item $\KL(q \| p)$: ``Approximation gap.'' Measures how far $q_\phi$ is from the true posterior $p_\theta(\bz|\bx)$.
+\item \textbf{When is ELBO tight?} When $q_\phi = p_\theta(\bz|\bx)$ exactly, $\KL = 0$ and ELBO $= \log p(\bx)$.
+\item \textbf{Maximizing ELBO w.r.t. $\phi$}: Tightens the bound (makes $q_\phi$ closer to true posterior).
+\item \textbf{Maximizing ELBO w.r.t. $\theta$}: Increases $\log p(\bx)$ (makes the model fit data better).
+\end{itemize}
+\end{keybox}
+
+\subsubsection{ELBO Decomposition into Reconstruction + Regularization}\index{ELBO!Components}
+Expand $p(\bx,\bz) = p(\bx|\bz)p(\bz)$:
+\begin{align}
+\text{ELBO} &= \E_q\!\left[\log\frac{p(\bx|\bz)p(\bz)}{q(\bz|\bx)}\right] = \E_q[\log p(\bx|\bz)] + \E_q\!\left[\log\frac{p(\bz)}{q(\bz|\bx)}\right] \nonumber
+\end{align}
+\begin{equation}\label{eq:elbo_decomposed}
+\boxed{\text{ELBO} = \underbrace{\E_{q_\phi(\bz|\bx)}[\log p_\theta(\bx|\bz)]}_{\text{Reconstruction}} - \underbrace{\KL(q_\phi(\bz|\bx) \| p(\bz))}_{\text{Regularization}}}
+\end{equation}
+
+\begin{keybox}[ELBO Two Terms — Deep Analysis]
+\textbf{Term 1: Reconstruction} $\E_q[\log p_\theta(\bx|\bz)]$
+\begin{itemize}
+\item Sample $\bz \sim q_\phi(\bz|\bx)$ (encode), decode to $\hat{\bx}$, measure how well $\hat{\bx}$ matches $\bx$.
+\item For \textbf{Gaussian decoder} $p(\bx|\bz) = \mathcal{N}(\bx; \hat{\bx}_\theta(\bz), \sigma^2\mathbf{I})$:
+$$\log p(\bx|\bz) = -\frac{\|\bx - \hat{\bx}\|^2}{2\sigma^2} - \frac{d}{2}\log(2\pi\sigma^2)$$
+So maximizing reconstruction term $\equiv$ minimizing \textbf{MSE loss}.
+\item For \textbf{Bernoulli decoder} (binary images):
+$$\log p(\bx|\bz) = \sum_i [x_i \log \hat{x}_i + (1-x_i)\log(1-\hat{x}_i)]$$
+This is \textbf{binary cross-entropy}.
+\item \textbf{Encourages}: accurate reconstruction, faithful decoding.
+\end{itemize}
+
+\textbf{Term 2: KL Regularization} $\KL(q_\phi(\bz|\bx) \| p(\bz))$
+\begin{itemize}
+\item Measures divergence between encoder output $q_\phi(\bz|\bx)$ and prior $p(\bz) = \mathcal{N}(\mathbf{0}, \mathbf{I})$.
+\item \textbf{Encourages}: latent distribution to match the prior. This ensures:
+  \begin{itemize}
+  \item \textbf{Smooth latent space}: Similar $\bz$ values give similar outputs. No ``holes'' in latent space.
+  \item \textbf{Generative capability}: Can sample $\bz \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$ and decode to valid images.
+  \item \textbf{Regularization}: Prevents encoder from simply mapping each $\bx$ to a unique point in latent space (would be perfect reconstruction but no generation).
+  \end{itemize}
+\item \textbf{Minimized to}: 0 when $q(\bz|\bx) = p(\bz)$ for all $\bx$ (posterior collapse — bad!).
+\end{itemize}
+
+\textbf{Trade-off}: Reconstruction ($\uparrow$) vs Regularization ($\downarrow$). Perfect reconstruction wants each $\bx$ to map to a unique $\bz$ $\Rightarrow$ high KL. Perfect regularization wants all $\bz$ distributions identical $\Rightarrow$ no useful encoding.
+\end{keybox}
+
+\subsection{Reparameterization Trick}\index{Reparameterization Trick}\index{VAE!Reparameterization}
+
+\textbf{Problem}: The ELBO requires $\E_{q_\phi(\bz|\bx)}[\cdot]$. To estimate this with Monte Carlo, we sample $\bz \sim q_\phi(\bz|\bx)$. But \textbf{we can't backpropagate through sampling} — the operation ``draw from $\mathcal{N}(\bmu, \bsigma^2)$'' has no well-defined gradient w.r.t. $\bmu, \bsigma$.
+
+\textbf{Solution}: Reparameterize the random variable:
+\begin{equation}\label{eq:reparam}
+\boxed{\bz = \bmu_\phi(\bx) + \bsigma_\phi(\bx) \odot \epsilon, \quad \epsilon \sim \mathcal{N}(\mathbf{0}, \mathbf{I})}
+\end{equation}
+
+\begin{keybox}[Reparameterization Trick — Full Explanation]
+\textbf{Before}: $\bz \sim \mathcal{N}(\bmu, \bsigma^2)$ — stochastic node. Gradient $\partial\bz/\partial\bmu$ is undefined.
+
+\textbf{After}: $\bz = \bmu + \bsigma \odot \epsilon$ — deterministic function of $\bmu, \bsigma, \epsilon$.
+\begin{itemize}
+\item $\epsilon$ is sampled from $\mathcal{N}(0, \mathbf{I})$ — \textbf{fixed distribution, no parameters}.
+\item $\bz$ is now a \textbf{deterministic, differentiable} function of $\bmu$ and $\bsigma$.
+\item \textbf{Gradients}:
+\begin{align*}
+\frac{\partial \bz}{\partial \bmu} &= \mathbf{I} \quad \text{(direct)} \\
+\frac{\partial \bz}{\partial \bsigma} &= \epsilon \quad \text{(scales with noise)}
+\end{align*}
+\item \textbf{Gradient of loss w.r.t. encoder params $\phi$}:
+$$\frac{\partial\mathcal{L}}{\partial\phi} = \frac{\partial\mathcal{L}}{\partial\bz} \cdot \frac{\partial\bz}{\partial\bmu}\frac{\partial\bmu}{\partial\phi} + \frac{\partial\mathcal{L}}{\partial\bz}\cdot\frac{\partial\bz}{\partial\bsigma}\frac{\partial\bsigma}{\partial\phi}$$
+All terms are well-defined! Low variance estimator (vs REINFORCE which has high variance).
+\end{itemize}
+
+\textbf{Why not REINFORCE?}
+$$\nabla_\phi \E_q[f(\bz)] = \E_q[f(\bz) \nabla_\phi \log q(\bz|\bx)]$$
+This is unbiased but has \textbf{extremely high variance} — needs millions of samples for stable gradients. Reparameterization gives low-variance gradients with just 1 sample per datapoint.
+\end{keybox}
+
+\subsection{KL Divergence — Closed Form for Gaussians}\index{KL Divergence!Closed Form}
+For $q = \mathcal{N}(\bmu, \text{diag}(\bsigma^2))$ and $p = \mathcal{N}(\mathbf{0}, \mathbf{I})$:
+\begin{equation}\label{eq:kl_gaussian}
+\boxed{\KL(q \| p) = -\frac{1}{2}\sum_{j=1}^{d}\left(1 + \log\sigma_j^2 - \mu_j^2 - \sigma_j^2\right)}
+\end{equation}
+
+\textbf{Full derivation:}
+\begin{align*}
+\KL(q\|p) &= \E_q[\log q - \log p] \\
+&= \E_q\!\left[-\frac{1}{2}\sum_j\!\left(\log\sigma_j^2 + 1\right) + \frac{1}{2}\sum_j(z_j^2)\right] \\
+&= \frac{1}{2}\sum_j\!\left(-\log\sigma_j^2 - 1 + \E_q[z_j^2]\right) \\
+&= \frac{1}{2}\sum_j\!\left(-\log\sigma_j^2 - 1 + \mu_j^2 + \sigma_j^2\right) \quad (\text{since } \E[z_j^2] = \mu_j^2 + \sigma_j^2)
+\end{align*}
+
+\begin{keybox}[KL Formula — Every Term]
+\begin{itemize}
+\item $\mu_j^2$: Penalizes means far from 0. Keeps latent distributions centered.
+\item $\sigma_j^2$: Penalizes variances $\neq 1$. If $\sigma_j^2 > 1$ (too spread) or $\sigma_j^2 < 1$ (too concentrated), KL increases.
+\item $\log\sigma_j^2$: Counterbalances $\sigma_j^2$. Together: $(1 + \log\sigma_j^2 - \sigma_j^2) \leq 0$, with equality at $\sigma_j^2 = 1$.
+\item Each dimension $j$ contributes independently (diagonal covariance assumption).
+\item \textbf{Minimum}: $\KL = 0$ when $\bmu = \mathbf{0}$ and $\bsigma^2 = \mathbf{1}$ (posterior = prior).
+\end{itemize}
+\end{keybox}
+
+\subsection{VAE Training Algorithm}\index{VAE!Training}
+\begin{algorithm}[H]
+\caption{VAE Training (1 step)}\small
+\begin{algorithmic}[1]
+\State Sample $\bx$ from training data
+\State $[\bmu, \log\bsigma^2] = \text{Encoder}_\phi(\bx)$ \Comment{Forward pass encoder}
+\State $\epsilon \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$ \Comment{Sample noise}
+\State $\bz = \bmu + \bsigma \odot \epsilon$ \Comment{Reparameterize}
+\State $\hat{\bx} = \text{Decoder}_\theta(\bz)$ \Comment{Forward pass decoder}
+\State $\mathcal{L}_{recon} = \|\bx - \hat{\bx}\|^2$ \Comment{MSE reconstruction}
+\State $\mathcal{L}_{KL} = -\frac{1}{2}\sum_j(1+\log\sigma_j^2-\mu_j^2-\sigma_j^2)$
+\State $\mathcal{L} = \mathcal{L}_{recon} + \mathcal{L}_{KL}$ \Comment{Total ELBO (negated)}
+\State Update $\phi, \theta$ via $\nabla_{\phi,\theta}\mathcal{L}$ \Comment{Both encoder and decoder}
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Generation}: $\bz \sim \mathcal{N}(\mathbf{0}, \mathbf{I}) \to \hat{\bx} = \text{Decoder}_\theta(\bz)$.\\
+\textbf{Reconstruction}: $\bx \to \text{Encoder} \to \bz \to \text{Decoder} \to \hat{\bx}$.\\
+\textbf{Interpolation}: $\bz_1 = \text{Enc}(\bx_1), \bz_2 = \text{Enc}(\bx_2), \bz_\alpha = (1{-}\alpha)\bz_1 + \alpha\bz_2, \hat{\bx}_\alpha = \text{Dec}(\bz_\alpha)$.
+
+\subsection{VAE Variants \& Extensions}\index{VAE!Variants}
+
+\subsubsection{$\beta$-VAE}\index{$\beta$-VAE}
+\begin{equation}
+\mathcal{L}_{\beta\text{-VAE}} = \mathcal{L}_{recon} + \beta \cdot \KL(q \| p), \quad \beta > 1
+\end{equation}
+\textbf{Purpose}: Increase $\beta$ forces stronger regularization $\Rightarrow$ more \textbf{disentangled} latent dimensions. Each $z_j$ controls one independent factor of variation (e.g., $z_1$ = hair color, $z_2$ = face shape).
+
+\textbf{Trade-off}: $\beta = 1$ (standard VAE): best reconstruction, entangled. $\beta = 4$: disentangled but blurry. $\beta \to \infty$: posterior collapse ($q \to p$, useless latent).
+
+\subsubsection{VQ-VAE (Vector Quantized VAE)}\index{VQ-VAE}
+\textbf{Key change}: Replace continuous $\bz$ with \textbf{discrete} latent codes.
+\begin{enumerate}
+\item Encoder outputs continuous vector $\mathbf{z}_e$.
+\item Quantize: $\bz_q = \arg\min_{\mathbf{e}_k \in \text{codebook}} \|\mathbf{z}_e - \mathbf{e}_k\|$ (nearest codebook vector).
+\item Decoder receives $\bz_q$.
+\end{enumerate}
+\textbf{Advantages}: No posterior collapse (discrete codes are always used), sharper outputs, compatible with autoregressive priors (PixelCNN over discrete codes).
+
+\textbf{Used in DALL-E}: dVAE (discrete VAE) tokenizes images into $32{\times}32$ grid of 8192 possible tokens.
+
+\subsubsection{Conditional VAE (CVAE)}\index{CVAE}
+Condition on label $y$: $q_\phi(\bz|\bx,y)$ and $p_\theta(\bx|\bz,y)$.
+ELBO: $\E_q[\log p(\bx|\bz,y)] - \KL(q(\bz|\bx,y)\|p(\bz|y))$.
+
+\subsubsection{Hierarchical VAE}\index{Hierarchical VAE}
+Multiple levels of latent: $\bz_1, \bz_2, \ldots, \bz_L$ (NVAE, Very Deep VAE). Each level captures different abstraction. More expressive, but harder to train.
+
+\subsection{Posterior Collapse: Diagnosis \& Solutions}\index{Posterior Collapse}
+\textbf{Symptom}: $\KL(q\|p) \to 0$ during training. $q(\bz|\bx) \approx p(\bz)$ for all $\bx$.
+
+\textbf{Root cause}: Powerful decoder (e.g., autoregressive PixelCNN) can model $p(\bx)$ without using $\bz$. Optimizer finds it easier to minimize KL to 0 than to learn useful $\bz$.
+
+\textbf{Solutions}:
+\begin{enumerate}
+\item \textbf{KL annealing}: Start with $\beta = 0$ (no KL penalty), increase to $\beta = 1$ over training. Forces encoder to encode before KL kicks in.
+\item \textbf{Free bits}: $\max(\KL_j, \lambda)$ per dimension $j$. Ensures minimum KL per dimension.
+\item \textbf{Weaker decoder}: Use non-autoregressive CNN decoder. Can't model $p(\bx)$ alone $\Rightarrow$ forces $\bz$ usage.
+\item \textbf{VQ-VAE}: Discrete codes can't collapse to continuous prior.
+\item \textbf{Skip connections from encoder to decoder}: Forces information flow through $\bz$.
+\end{enumerate}
+
+\subsection{VAE in Generative Applications}\index{VAE!Applications}
+\begin{itemize}
+\item \textbf{Image generation}: Smooth interpolation, controlled generation.
+\item \textbf{Anomaly detection}: High reconstruction error $\Rightarrow$ anomaly. Also: low $p(\bx)$ via importance-weighted bound.
+\item \textbf{Drug discovery}: Generate molecules in latent space. Optimize in latent space for desired properties.
+\item \textbf{Latent diffusion**: VAE compresses images for Stable Diffusion. $512^2 \to 64^2$ latent $\Rightarrow$ $48\times$ fewer pixels for diffusion.
+\item \textbf{Data augmentation}: Sample near training points in latent space.
+\item \textbf{Representation learning}: $\beta$-VAE for disentangled features.
+\item \textbf{Text generation}: Sentence VAE (encode sentences to continuous space).
+\end{itemize}
+
+\subsection{VAE vs GAN vs Diffusion}\index{VAE!vs GAN}
+\begin{center}\small
+\begin{tabular}{lccc}\toprule
+& \textbf{VAE} & \textbf{GAN} & \textbf{Diffusion} \\\midrule
+Training & Stable (ELBO) & Unstable (minimax) & Stable (MSE) \\
+Density & Bound ($\log p$) & No & Bound (VLB) \\
+Quality & Blurry (MSE) & Sharp & \textbf{Best} \\
+Diversity & High & Mode collapse & High \\
+Latent space & Smooth & Unstructured & Stochastic \\
+Sampling speed & \textbf{Fast (1 step)} & Fast & Slow ($T$ steps) \\
+Encoder & Yes & No (usually) & No \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Exam Questions — VAE (Expanded)}\index{VAE!Exam Questions}
+
+\begin{examq}[Q1: Full ELBO Derivation]
+\textbf{Derive the ELBO from $\log p(\bx)$ using the KL decomposition approach. Then decompose into reconstruction + regularization.}
+
+\textbf{Answer:}
+Starting from log-evidence:\\
+$\log p(\bx) = \E_q[\log p(\bx)] = \E_q[\log \frac{p(\bx,\bz)}{p(\bz|\bx)}]$\\
+$= \E_q[\log \frac{p(\bx,\bz)q(\bz|\bx)}{p(\bz|\bx)q(\bz|\bx)}]$\\
+$= \underbrace{\E_q[\log \frac{p(\bx,\bz)}{q(\bz|\bx)}]}_{\text{ELBO}} + \underbrace{\E_q[\log\frac{q(\bz|\bx)}{p(\bz|\bx)}]}_{\KL \geq 0}$\\
+Decomposing ELBO: $p(\bx,\bz) = p(\bx|\bz)p(\bz)$\\
+$\text{ELBO} = \E_q[\log p(\bx|\bz)] + \E_q[\log p(\bz) - \log q(\bz|\bx)]$\\
+$= \E_q[\log p(\bx|\bz)] - \KL(q(\bz|\bx)\|p(\bz))$. \qed
+\end{examq}
+
+\begin{examq}[Q2: Numerical KL Computation]
+\textbf{Compute KL for 3D latent: $\bmu = [0.5, -1.0, 0.2]$, $\bsigma^2 = [0.8, 1.5, 0.3]$.}
+
+\textbf{Answer:}
+$\KL = -\frac{1}{2}\sum_{j=1}^3 (1 + \log\sigma_j^2 - \mu_j^2 - \sigma_j^2)$\\
+$j{=}1$: $1 + \log 0.8 - 0.25 - 0.8 = 1 - 0.223 - 0.25 - 0.8 = -0.273$\\
+$j{=}2$: $1 + \log 1.5 - 1.0 - 1.5 = 1 + 0.405 - 1.0 - 1.5 = -1.095$\\
+$j{=}3$: $1 + \log 0.3 - 0.04 - 0.3 = 1 - 1.204 - 0.04 - 0.3 = -0.544$\\
+$\KL = -\frac{1}{2}(-0.273 - 1.095 - 0.544) = -\frac{1}{2}(-1.912) = \boxed{0.956}$\\
+Dimension 2 contributes most (large $|\mu|$ AND large $\sigma^2$).
+\end{examq}
+
+\begin{examq}[Q3: Reparameterization Necessity]
+\textbf{Explain why $\nabla_\phi \E_{z \sim q_\phi}[f(z)]$ is undefined without reparameterization, and how the trick fixes it.}
+
+\textbf{Answer:} $\E_{z \sim q_\phi}[f(z)] = \int f(z)q_\phi(z|x)dz$. Taking $\nabla_\phi$: $\nabla_\phi \int f(z)q_\phi(z|x)dz = \int f(z)\nabla_\phi q_\phi(z|x)dz$. This integral depends on the \textbf{distribution}, not a specific sample. To estimate with samples, we'd need REINFORCE: $\nabla_\phi = \E_q[f(z)\nabla_\phi \log q(z|x)]$ — high variance, needs many samples.
+\textbf{Trick}: Write $z = g(\phi, \epsilon) = \mu_\phi + \sigma_\phi \epsilon$. Then: $\E_{z\sim q}[f(z)] = \E_{\epsilon \sim \mathcal{N}(0,1)}[f(g(\phi,\epsilon))]$. Now: $\nabla_\phi = \E_\epsilon[\nabla_\phi f(g(\phi,\epsilon))] = \E_\epsilon[f'(g(\phi,\epsilon))\nabla_\phi g(\phi,\epsilon)]$. This is a standard expectation — estimate with 1 sample! Gradient flows through $g(\phi,\epsilon)$ deterministically.
+\end{examq}
+
+\begin{examq}[Q4: Posterior Collapse Scenario]
+\textbf{Your VAE on text data achieves $\KL \approx 0.01$ and generates coherent text. A colleague argues this is great (low KL = good). Why are they wrong?}
+
+\textbf{Answer:} $\KL \approx 0$ means $q(\bz|\bx) \approx p(\bz) = \mathcal{N}(0,I)$ for ALL inputs. This is \textbf{posterior collapse}: the latent $\bz$ encodes \textbf{zero information about} $\bx$. The decoder generates coherent text by ignoring $\bz$ entirely — it's modeling $p(\bx)$ as an unconditional autoregressive model. \textbf{Consequences}: (1) Can't interpolate between sentences in latent space (all $\bz$ are identical). (2) Can't perform controlled generation (changing $\bz$ doesn't change output). (3) The ``VAE'' has collapsed to a pure autoregressive model with a useless encoder. \textbf{Good VAE}: $\KL \sim 5{-}20$ nats, indicating $\bz$ carries meaningful information.
+\end{examq}
+
+\begin{examq}[Q5: $\beta$-VAE Analysis]
+\textbf{What happens at $\beta = 0$, $\beta = 1$, and $\beta \to \infty$? Explain the disentanglement-reconstruction trade-off.}
+
+\textbf{Answer:} \textbf{$\beta = 0$}: No KL term. Model = deterministic autoencoder. Perfect reconstruction, unstructured latent space, can't generate (sampling from prior gives garbage). \textbf{$\beta = 1$}: Standard VAE. Balanced reconstruction and regularization. Latent space is smooth, generative, but factors may be entangled. \textbf{$\beta \to \infty$}: KL dominates. $q(\bz|\bx) \to \mathcal{N}(0,I)$. Fully disentangled (each dimension matches prior independently) but reconstruction is terrible (no information in $\bz$). \textbf{Trade-off}: Higher $\beta$ pressures each latent dimension to be independent (disentangled) but reduces the total information capacity of $\bz$, degrading reconstruction. Optimal $\beta$ depends on task: $\beta \approx 4$ for disentanglement, $\beta = 1$ for generation quality.
+\end{examq}
+
+\begin{examq}[Q6: VAE in Stable Diffusion]
+\textbf{Explain why Stable Diffusion uses a pre-trained VAE, and what role each component plays.}
+
+\textbf{Answer:} VAE provides \textbf{efficient compression}: Encoder compresses $512{\times}512{\times}3$ image to $64{\times}64{\times}4$ latent (48$\times$ fewer values). Diffusion model operates in this latent space, making attention ($O(N^2)$) tractable: $64^2 = 4096$ tokens vs $512^2 = 262144$. \textbf{Key}: VAE is trained \textbf{separately} (not jointly with diffusion). It learns a general-purpose compression. The diffusion model then learns the distribution of latent codes, not pixels. At inference: (1) Sample noise in latent space. (2) Denoise with U-Net. (3) Decode denoised latent with VAE decoder to pixel space. The VAE decoder handles the ``upsampling'' from latent to $512^2$, producing detailed pixels from the compact latent representation.
+\end{examq}
